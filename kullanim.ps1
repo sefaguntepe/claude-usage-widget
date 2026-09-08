@@ -505,8 +505,15 @@ function Update-Bar {
     if ($oran -lt 0.0) { $oran = 0.0 }
     if ($oran -gt 1.0) { $oran = 1.0 }
     $Dolgu.Width = $oran * $IZ_GENISLIK
-    $Dolgu.Background = [Windows.Media.BrushConverter]::new().ConvertFromString(
-        (Get-BarRengi -Yuzde $yuzde -Sifirlanma $sifirlanma -BitisDk $BitisDk))
+    # Bayat veride bar GRİYE döner. Yalnızca soluklaştırmak yetmiyordu: soluk
+    # da olsa mavi/amber bir bar "canlı veri" gibi okunuyor ve eski yüzde
+    # güncel sanılıyor. Renk, tazeliğin en güçlü sinyali.
+    $renk = if ($script:VeriTaze) {
+        Get-BarRengi -Yuzde $yuzde -Sifirlanma $sifirlanma -BitisDk $BitisDk
+    } else {
+        '#5A6472'
+    }
+    $Dolgu.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($renk)
     Write-Tani ("bar: yuzde={0} izGenislik={1} atanan={2} gercek={3} hizalama={4}" -f `
         $yuzde, $IZ_GENISLIK, $Dolgu.Width, $Dolgu.ActualWidth, $Dolgu.HorizontalAlignment)
 }
@@ -804,9 +811,13 @@ function Update-Gorunum {
         if ($yasSn -gt $BAYAT_SN) {
             $Kok.Opacity = 0.45
             $Yas.Text = Format-Yas $yazildi
+            $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8A33D')
+            $Yas.Opacity = 1.0
         } else {
             $Kok.Opacity = 1.0
             $Yas.Text = (T 'CANLI')
+            $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8EDF5')
+            $Yas.Opacity = 0.45
         }
 
         # Uzun süredir beslenmiyorsa SEBEBİNİ de söyle. Yalnızca soluklaşmak
