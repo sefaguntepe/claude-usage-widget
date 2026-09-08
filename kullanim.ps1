@@ -1,0 +1,1052 @@
+﻿#requires -Version 5.1
+<#
+    Claude Kullanım  —  masaüstü limit widget'ı
+    Sefa Güntepe
+
+    Veriyi %APPDATA%\ClaudeKullanim\durum.json'dan okur; o dosyayı Claude Code'un
+    statusLine betiği (durum-yaz.js) yazar. Kendisi ağa çıkmaz, token okumaz.
+
+    Pencere yaklaşımı masaüstü saat widget'ı ile aynı: normal üst düzey pencere
+    ama WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW + düzenli HWND_BOTTOM.
+#>
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+
+Add-Type -Namespace Widget -Name Win32K -MemberDefinition @'
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+
+    [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out POINT lpPoint);
+
+    // Sag tik menusunu kapatma nobetcisi icin. GetKeyState degil
+    // GetAsyncKeyState: ilki mesaj kuyrugu baglamina muhtac, pencere odak
+    // almadigi icin bizde guvenilir calismaz.
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr WindowFromPoint(POINT p);
+
+    [DllImport("user32.dll")]
+    public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int pid);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
+'@
+
+# Pencereyi z-sırasının dibinde tutmanın DOĞRU yolu.
+#
+# Önceki sürüm bunu 2 saniyede bir SetWindowPos çağırarak yapıyordu ve
+# masaüstünü kullanılamaz hâle getiriyordu: sağ tık menüsü açılıyor, ilk
+# yoklamada kapanıyordu; simge seçmek için sürüklenen çerçeve de bozuluyordu.
+#
+# Doğrusu yoklama değil, olay yakalamak: Windows pencerenin konumunu/z-sırasını
+# değiştirmek üzereyken WM_WINDOWPOSCHANGING gönderir. O mesajdaki
+# hwndInsertAfter alanını HWND_BOTTOM yapıp SWP_NOZORDER bayrağını temizlemek
+# yeterli. Böylece pencere kendiliğinden dipte kalır ve masaüstüne hiç
+# dokunulmaz.
+Add-Type -ReferencedAssemblies WindowsBase, PresentationCore -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+
+public static class ZDuzeni
+{
+    const int WM_WINDOWPOSCHANGING = 0x0046;
+    const int SWP_NOZORDER = 0x0004;
+
+    static IntPtr Hook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WM_WINDOWPOSCHANGING)
+        {
+            // WINDOWPOS: hwnd, hwndInsertAfter, x, y, cx, cy, flags
+            Marshal.WriteIntPtr(lParam, IntPtr.Size, (IntPtr)1);   // HWND_BOTTOM
+            int bayrakOfset = IntPtr.Size * 2 + 16;
+            int bayraklar = Marshal.ReadInt32(lParam, bayrakOfset);
+            Marshal.WriteInt32(lParam, bayrakOfset, bayraklar & ~SWP_NOZORDER);
+        }
+        return IntPtr.Zero;
+    }
+
+    public static void Bagla(IntPtr hwnd)
+    {
+        HwndSource src = HwndSource.FromHwnd(hwnd);
+        if (src != null) src.AddHook(new HwndSourceHook(Hook));
+    }
+}
+'@
+
+$GWL_EXSTYLE       = -20
+$WS_EX_TOOLWINDOW  = 0x00000080
+$WS_EX_NOACTIVATE  = 0x08000000
+$HWND_BOTTOM       = [IntPtr]1     # 8 degil
+$SW_SHOWNOACTIVATE = 4
+$SWP_NOSIZE        = 0x0001
+$SWP_NOMOVE        = 0x0002
+$SWP_NOACTIVATE    = 0x0010
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dosyalar
+# ─────────────────────────────────────────────────────────────────────────────
+$VeriKlasor  = Join-Path $env:APPDATA 'ClaudeKullanim'
+$DurumDosya  = Join-Path $VeriKlasor 'durum.json'      # statusLine yazar
+$OlayDosya   = Join-Path $VeriKlasor 'olay.json'       # hook'lar yazar
+$AyarDosya   = Join-Path $VeriKlasor 'pencere.json'    # widget yazar
+
+$OLAY_OMUR_SN  = 900    # olay satırı 15 dk sonra kaybolur
+$YANIP_SONME_SN = 12    # ilk 12 saniye dikkat çeksin diye yanıp söner
+$COK_BAYAT_SN  = 43200  # 12 saatten eskiyse sebebini de yaz
+
+# Bar rayının genişliği. XAML'deki iki Border Width'i ve Kok.Width ile AYNI
+# olmalı. 232 + 2×18 kapsül dolgusu = 268 → masaüstü saat widget'ı ile aynı en.
+$IZ_GENISLIK = 232.0
+$BAYAT_SN    = 300      # 5 dk'dan eski veri "bayat" sayılır
+
+$ArkaPlanlar = @{ yok = '#00000000'; hafif = '#59000000'; koyu = '#A6000000' }
+
+function Get-Ayarlar {
+    # esik5 / esikH : uyarı eşiği yüzdesi, 0 = kapalı
+    # atesli5 / atesliH : uyarının verildiği pencerenin resets_at değeri.
+    #   Pencere kimliği olarak resets_at kullanılıyor — yeni pencere başlayınca
+    #   değer değişir ve uyarı hakkı kendiliğinden tazelenir. Zaman damgası
+    #   tutup "24 saat geçti mi" diye bakmaktan daha doğru: kullanıcı için
+    #   anlamlı sınır takvim değil, kotanın sıfırlanma anıdır.
+    $v = [ordered]@{ sol = $null; ust = $null; arkaPlan = 'hafif'
+                     esik5 = 0; esikH = 0; atesli5 = $null; atesliH = $null }
+    if (Test-Path $AyarDosya) {
+        try {
+            $j = Get-Content $AyarDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($k in @('sol', 'ust', 'arkaPlan', 'esik5', 'esikH', 'atesli5', 'atesliH')) {
+                if ($j.PSObject.Properties.Name -contains $k -and $null -ne $j.$k) { $v[$k] = $j.$k }
+            }
+        } catch { }
+    }
+    [pscustomobject]$v
+}
+
+function Save-Ayarlar {
+    param($Ayar)
+    try {
+        if (-not (Test-Path $VeriKlasor)) { New-Item -ItemType Directory -Path $VeriKlasor -Force | Out-Null }
+        $Ayar | ConvertTo-Json | Set-Content -Path $AyarDosya -Encoding UTF8
+    } catch { }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Biçimlendirme
+# ─────────────────────────────────────────────────────────────────────────────
+function Format-Kalan {
+    param([Nullable[datetime]]$Sifirlanma)
+    if ($null -eq $Sifirlanma) { return '' }
+    $fark = $Sifirlanma - [DateTime]::Now
+    if ($fark.TotalSeconds -le 0) { return (T 'SIFIRLANDI') }
+    if ($fark.TotalMinutes -lt 1) { return (T 'BIRAZDAN') }
+    if ($fark.TotalHours -lt 1)   { return ((T 'KALAN_DK') -f [int]$fark.TotalMinutes) }
+    return ((T 'KALAN_SADK') -f [int]$fark.TotalHours, ($fark.Minutes))
+}
+
+function Format-Yas {
+    param([datetime]$Zaman)
+    $fark = [DateTime]::Now - $Zaman
+    if ($fark.TotalSeconds -lt 90)  { return (T 'YAS_SIMDI') }
+    if ($fark.TotalMinutes -lt 60)  { return ((T 'YAS_DK') -f [int]$fark.TotalMinutes) }
+    if ($fark.TotalHours -lt 24)    { return ((T 'YAS_SA') -f [int]$fark.TotalHours) }
+    return ((T 'YAS_GUN') -f [int]$fark.TotalDays)
+}
+
+# Bar rengi. Sadece doluluğa değil TÜKETİM HIZINA da bakar: pencere
+# sıfırlanmadan önce bitecek gibiyse doluluk düşük olsa bile kırmızı yanar.
+# ("%60 dolu ama son 20 dakikada %30 yendi" durumu asıl tehlikeli olandır.)
+function Get-BarRengi {
+    param([double]$Yuzde, [Nullable[datetime]]$Sifirlanma, $BitisDk)
+
+    if ($null -ne $BitisDk -and $null -ne $Sifirlanma) {
+        $kalanDk = ($Sifirlanma - [DateTime]::Now).TotalMinutes
+        if ($kalanDk -gt 0 -and [double]$BitisDk -lt $kalanDk) { return '#E5484D' }
+    }
+    if ($Yuzde -ge 90) { return '#E5484D' }   # kırmızı
+    if ($Yuzde -ge 75) { return '#E8A33D' }   # amber
+    return '#4C8DF6'                          # mavi
+}
+
+function Format-Sure {
+    param([int]$Dakika)
+    if ($Dakika -lt 60) { return ((T 'SURE_DK') -f $Dakika) }
+    return ((T 'SURE_SADK') -f [int]($Dakika / 60), ($Dakika % 60))
+}
+
+# Gün kısaltmaları dile göre. Fonksiyon olarak duruyor çünkü $DIL bu satırdan
+# sonra tanımlanıyor; çağrı anında okumak sıralamaya bağımlılığı kaldırıyor.
+function Get-GunKisa {
+    param([string]$Gun)
+    $tablo = @{
+        tr = @{ Monday='Pt'; Tuesday='Sa'; Wednesday='Ça'; Thursday='Pe'; Friday='Cu'; Saturday='Ct'; Sunday='Pa' }
+        en = @{ Monday='Mo'; Tuesday='Tu'; Wednesday='We'; Thursday='Th'; Friday='Fr'; Saturday='Sa'; Sunday='Su' }
+    }
+    return $tablo[$DIL][$Gun]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dil — Windows görüntü diline göre otomatik (yalnızca tr / en)
+# ─────────────────────────────────────────────────────────────────────────────
+$DIL = if ([System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName -eq 'tr') { 'tr' } else { 'en' }
+$Kultur = [System.Globalization.CultureInfo]::GetCultureInfo($(if ($DIL -eq 'tr') { 'tr-TR' } else { 'en-US' }))
+
+$METINLER = @{
+    tr = @{
+        MENU_ARKAPLAN='Arka plan'; MENU_YOK='Yok (tam şeffaf)'; MENU_HAFIF='Hafif'; MENU_KOYU='Koyu'
+        MENU_ESIK='Uyarı eşiği'; MENU_5SAAT='5 saatlik limit'; MENU_HAFTA='Haftalık'
+        MENU_SIFIRLA='Konumu sıfırla (sağ üst)'; MENU_KAPAT='Kapat'; MENU_KAPALI='Kapalı'
+        BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
+        SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'
+        SIFIRLANDI='sıfırlandı'; BIRAZDAN='birazdan sıfırlanır'
+        KALAN_DK='{0} dk sonra'; KALAN_SADK='{0} sa {1} dk sonra'
+        YAS_SIMDI='az önce'; YAS_DK='{0} dk önce'; YAS_SA='{0} sa önce'; YAS_GUN='{0} gün önce'
+        SURE_DK='{0} dk'; SURE_SADK='{0} sa {1} dk'
+        HIZ_UYARI='Bu hızla ~{0} içinde biter'
+        VERI_YOK='Henüz veri yok. Claude Code açıldıktan ve ilk yanıt geldikten sonra dolar.'
+        VERI_BAYAT='Veri tazelenmiyor: yüzdeler yalnızca terminal (CMD) Claude Code oturumunda güncellenir, masaüstü uygulaması beslemez.'
+        OLAY_BITTI='Claude bitirdi'; OLAY_IZIN='İzin bekliyor'; OLAY_GIRDI='Girdi bekliyor'
+        OLAY_AJAN_GIRDI='Ajan girdi bekliyor'; OLAY_AJAN_BITTI='Ajan tamamlandı'; OLAY_BEKLIYOR='Claude sizi bekliyor'
+        UYARI_BASLIK='Kullanım uyarısı'; UYARI_METIN='{0} %{1:0} seviyesine ulaştı (eşik %{2}).'
+        UYARI_SIFIRLANMA='Sıfırlanma: {0}'
+        ESIK_5SAAT='5 saatlik limit'; ESIK_HAFTA='Haftalık limit'
+    }
+    en = @{
+        MENU_ARKAPLAN='Background'; MENU_YOK='None (transparent)'; MENU_HAFIF='Light'; MENU_KOYU='Dark'
+        MENU_ESIK='Alert threshold'; MENU_5SAAT='5-hour limit'; MENU_HAFTA='Weekly'
+        MENU_SIFIRLA='Reset position (top right)'; MENU_KAPAT='Close'; MENU_KAPALI='Off'
+        BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
+        SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'
+        SIFIRLANDI='reset'; BIRAZDAN='resetting shortly'
+        KALAN_DK='in {0} min'; KALAN_SADK='in {0} h {1} min'
+        YAS_SIMDI='just now'; YAS_DK='{0} min ago'; YAS_SA='{0} h ago'; YAS_GUN='{0} d ago'
+        SURE_DK='{0} min'; SURE_SADK='{0} h {1} min'
+        HIZ_UYARI='At this rate it runs out in ~{0}'
+        VERI_YOK='No data yet. It fills after Claude Code opens and the first response arrives.'
+        VERI_BAYAT='Not refreshing: percentages only update in a terminal Claude Code session — the desktop app does not feed them.'
+        OLAY_BITTI='Claude finished'; OLAY_IZIN='Waiting for permission'; OLAY_GIRDI='Waiting for input'
+        OLAY_AJAN_GIRDI='Agent needs input'; OLAY_AJAN_BITTI='Agent completed'; OLAY_BEKLIYOR='Claude is waiting for you'
+        UYARI_BASLIK='Usage alert'; UYARI_METIN='{0} reached {1:0}% (threshold {2}%).'
+        UYARI_SIFIRLANMA='Resets: {0}'
+        ESIK_5SAAT='5-hour limit'; ESIK_HAFTA='Weekly limit'
+    }
+}
+
+function T { param([string]$Anahtar) return $METINLER[$DIL][$Anahtar] }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Arayüz
+# ─────────────────────────────────────────────────────────────────────────────
+$xamlMetin = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Claude Kullanim"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="False" ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight" WindowStartupLocation="Manual"
+        UseLayoutRounding="True" TextOptions.TextRenderingMode="ClearType">
+
+  <Window.ContextMenu>
+    <ContextMenu>
+      <MenuItem Header="@@MENU_ARKAPLAN@@">
+        <MenuItem x:Name="MnuBgYok"   Header="@@MENU_YOK@@" IsCheckable="True"/>
+        <MenuItem x:Name="MnuBgHafif" Header="@@MENU_HAFIF@@"            IsCheckable="True"/>
+        <MenuItem x:Name="MnuBgKoyu"  Header="@@MENU_KOYU@@"             IsCheckable="True"/>
+      </MenuItem>
+      <MenuItem Header="@@MENU_ESIK@@">
+        <MenuItem x:Name="MnuEsik5" Header="@@MENU_5SAAT@@"/>
+        <MenuItem x:Name="MnuEsikH" Header="@@MENU_HAFTA@@"/>
+      </MenuItem>
+      <Separator/>
+      <MenuItem x:Name="MnuSifirla" Header="@@MENU_SIFIRLA@@"/>
+      <MenuItem x:Name="MnuKapat"   Header="@@MENU_KAPAT@@"/>
+    </ContextMenu>
+  </Window.ContextMenu>
+
+  <Border x:Name="Kapsul" CornerRadius="16" Padding="18,13,18,15" Background="#59000000">
+    <StackPanel x:Name="Kok" Width="232">
+      <StackPanel.Effect>
+        <DropShadowEffect BlurRadius="7" ShadowDepth="0" Opacity="0.9" Color="#FF000000"/>
+      </StackPanel.Effect>
+
+      <!-- baslik -->
+      <Grid Margin="0,0,0,10">
+        <TextBlock Text="@@BASLIK@@" FontFamily="Segoe UI" FontSize="9.5"
+                   FontWeight="SemiBold" Foreground="#E8EDF5" Opacity="0.55"/>
+        <TextBlock x:Name="Yas" HorizontalAlignment="Right" FontFamily="Segoe UI"
+                   FontSize="9.5" Foreground="#E8EDF5" Opacity="0.45"/>
+      </Grid>
+
+      <!-- 5 saatlik limit -->
+      <Grid Margin="0,0,0,5">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <TextBlock Grid.Column="0" Text="@@ETIKET_5SAAT@@" FontFamily="Segoe UI" FontSize="11.5"
+                   Foreground="#F0F4FA"/>
+        <TextBlock x:Name="Sifir5" Grid.Column="1" FontFamily="Segoe UI" FontSize="10.5"
+                   Foreground="#E8EDF5" Opacity="0.5" TextAlignment="Right" Margin="10,1,10,0"/>
+        <TextBlock x:Name="Yuzde5" Grid.Column="2" FontFamily="Segoe UI" FontSize="11.5"
+                   FontWeight="SemiBold" Foreground="#F0F4FA" TextAlignment="Right" MinWidth="34"
+                   Typography.NumeralAlignment="Tabular"/>
+      </Grid>
+      <Border Width="232" Height="5" CornerRadius="2.5" Background="#26FFFFFF" HorizontalAlignment="Left">
+        <Border x:Name="Dolgu5" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      </Border>
+
+      <!-- haftalik limit -->
+      <Grid Margin="0,14,0,5">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <TextBlock Grid.Column="0" Text="@@ETIKET_HAFTA@@" FontFamily="Segoe UI" FontSize="11.5"
+                   Foreground="#F0F4FA"/>
+        <TextBlock x:Name="SifirH" Grid.Column="1" FontFamily="Segoe UI" FontSize="10.5"
+                   Foreground="#E8EDF5" Opacity="0.5" TextAlignment="Right" Margin="10,1,10,0"/>
+        <TextBlock x:Name="YuzdeH" Grid.Column="2" FontFamily="Segoe UI" FontSize="11.5"
+                   FontWeight="SemiBold" Foreground="#F0F4FA" TextAlignment="Right" MinWidth="34"
+                   Typography.NumeralAlignment="Tabular"/>
+      </Grid>
+      <Border Width="232" Height="5" CornerRadius="2.5" Background="#26FFFFFF" HorizontalAlignment="Left">
+        <Border x:Name="DolguH" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      </Border>
+
+      <!-- tuketim hizi uyarisi -->
+      <TextBlock x:Name="HizUyari" FontFamily="Segoe UI" FontSize="10" Foreground="#E5484D"
+                 Margin="0,9,0,0" Visibility="Collapsed" TextWrapping="Wrap" MaxWidth="232"/>
+
+      <!-- son 7 gun -->
+      <StackPanel x:Name="HaftaBolum" Margin="0,14,0,0" Visibility="Collapsed">
+        <Grid>
+          <TextBlock Text="@@SON7@@" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
+                     Foreground="#E8EDF5" Opacity="0.45"/>
+          <TextBlock x:Name="BugunOzet" HorizontalAlignment="Right" FontFamily="Segoe UI"
+                     FontSize="9" Foreground="#E8EDF5" Opacity="0.45"/>
+        </Grid>
+        <Grid Margin="0,6,0,0" Width="232" HorizontalAlignment="Left">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <Grid Grid.Column="0">
+            <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border x:Name="Cub0" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
+            <TextBlock x:Name="Etk0" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+          </Grid>
+          <Grid Grid.Column="1">
+            <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border x:Name="Cub1" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
+            <TextBlock x:Name="Etk1" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+          </Grid>
+          <Grid Grid.Column="2">
+            <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border x:Name="Cub2" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
+            <TextBlock x:Name="Etk2" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+          </Grid>
+          <Grid Grid.Column="3">
+            <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border x:Name="Cub3" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
+            <TextBlock x:Name="Etk3" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+          </Grid>
+          <Grid Grid.Column="4">
+            <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border x:Name="Cub4" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
+            <TextBlock x:Name="Etk4" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+          </Grid>
+          <Grid Grid.Column="5">
+            <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border x:Name="Cub5" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
+            <TextBlock x:Name="Etk5" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+          </Grid>
+          <Grid Grid.Column="6">
+            <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+            <Border x:Name="Cub6" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
+            <TextBlock x:Name="Etk6" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+          </Grid>
+        </Grid>
+      </StackPanel>
+
+      <!-- olay satiri: Claude bitirdi / izin bekliyor -->
+      <Border x:Name="OlayKutu" Visibility="Collapsed" Margin="0,13,0,0" CornerRadius="7"
+              Padding="9,6,9,6" Background="#1F3BD16F" Width="232">
+        <StackPanel Orientation="Horizontal">
+          <TextBlock x:Name="OlayIkon" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                     VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#3BD16F"/>
+          <StackPanel VerticalAlignment="Center">
+            <TextBlock x:Name="OlayMetin" FontFamily="Segoe UI" FontSize="10.5"
+                       Foreground="#EAF3EC" TextTrimming="CharacterEllipsis" MaxWidth="186"/>
+            <TextBlock x:Name="OlayAlt" FontFamily="Segoe UI" FontSize="9.5" Opacity="0.6"
+                       Foreground="#EAF3EC" TextTrimming="CharacterEllipsis" MaxWidth="186"
+                       Margin="0,1,0,0"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- veri yoksa -->
+      <TextBlock x:Name="Uyari" FontFamily="Segoe UI" FontSize="10.5" Foreground="#E8A33D"
+                 Opacity="0.85" Margin="0,11,0,0" Visibility="Collapsed" TextWrapping="Wrap"
+                 MaxWidth="232"/>
+    </StackPanel>
+  </Border>
+</Window>
+'@
+
+# XAML'deki @@ANAHTAR@@ yer tutucuları dile göre dolduruluyor. Böylece her
+# metin öğesine x:Name verip koddan tek tek atamak gerekmiyor.
+foreach ($a in $METINLER[$DIL].Keys) { $xamlMetin = $xamlMetin.Replace("@@$a@@", $METINLER[$DIL][$a]) }
+[xml]$xaml = $xamlMetin
+$win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
+function Get-Ogesi { param([string]$Ad) $win.FindName($Ad) }
+
+# Tanı günlüğü — yalnızca KULLANIM_TANI=1 iken yazar
+function Write-Tani {
+    param([string]$Mesaj)
+    if ($env:KULLANIM_TANI -ne '1') { return }
+    try {
+        Add-Content -Path (Join-Path $env:TEMP 'claude-kullanim-tani.log') `
+                    -Value ("{0:HH:mm:ss}  {1}" -f [DateTime]::Now, $Mesaj) -Encoding UTF8
+    } catch { }
+}
+
+$Kapsul = Get-Ogesi 'Kapsul';  $Kok    = Get-Ogesi 'Kok'
+$Yas    = Get-Ogesi 'Yas';     $Uyari  = Get-Ogesi 'Uyari'
+$Sifir5 = Get-Ogesi 'Sifir5';  $Yuzde5 = Get-Ogesi 'Yuzde5'; $Dolgu5 = Get-Ogesi 'Dolgu5'
+$SifirH = Get-Ogesi 'SifirH';  $YuzdeH = Get-Ogesi 'YuzdeH'; $DolguH = Get-Ogesi 'DolguH'
+$OlayKutu = Get-Ogesi 'OlayKutu'; $OlayIkon = Get-Ogesi 'OlayIkon'
+$OlayMetin = Get-Ogesi 'OlayMetin'; $OlayAlt = Get-Ogesi 'OlayAlt'
+$HizUyari = Get-Ogesi 'HizUyari'
+$HaftaBolum = Get-Ogesi 'HaftaBolum'; $BugunOzet = Get-Ogesi 'BugunOzet'
+$CUBUKLAR  = @(0..6 | ForEach-Object { Get-Ogesi ('Cub{0}' -f $_) })
+$ETIKETLER = @(0..6 | ForEach-Object { Get-Ogesi ('Etk{0}' -f $_) })
+
+$script:Ayar = Get-Ayarlar
+$script:Veri = $null
+$script:SonYazma = [datetime]::MinValue
+$script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
+
+
+function Set-ArkaPlan {
+    param([string]$Ad)
+    if (-not $ArkaPlanlar.ContainsKey($Ad)) { $Ad = 'hafif' }
+    $script:Ayar.arkaPlan = $Ad
+    $Kapsul.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($ArkaPlanlar[$Ad])
+    (Get-Ogesi 'MnuBgYok').IsChecked   = ($Ad -eq 'yok')
+    (Get-Ogesi 'MnuBgHafif').IsChecked = ($Ad -eq 'hafif')
+    (Get-Ogesi 'MnuBgKoyu').IsChecked  = ($Ad -eq 'koyu')
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Veri okuma
+# ─────────────────────────────────────────────────────────────────────────────
+function Read-Durum {
+    if (-not (Test-Path $DurumDosya)) { $script:Veri = $null; return }
+    try {
+        $bilgi = Get-Item $DurumDosya
+        if ($bilgi.LastWriteTime -le $script:SonYazma) { return }   # değişmediyse okuma
+        $script:Veri = Get-Content $DurumDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+        $script:SonYazma = $bilgi.LastWriteTime
+    } catch {
+        # Yarım yazılmış dosyaya denk geldiysek bir sonraki turda tekrar denenir.
+    }
+}
+
+function ConvertFrom-UnixSaniye {
+    param($Saniye)
+    if ($null -eq $Saniye) { return $null }
+    try { return [DateTimeOffset]::FromUnixTimeSeconds([int64]$Saniye).LocalDateTime } catch { return $null }
+}
+
+function Update-Bar {
+    param($Pencere, $YuzdeMetin, $SifirMetin, $Dolgu, $BitisDk = $null)
+
+    if ($null -eq $Pencere -or $null -eq $Pencere.used_percentage) {
+        $YuzdeMetin.Text = '—'
+        $SifirMetin.Text = ''
+        $Dolgu.Width = 0
+        return
+    }
+
+    $sifirlanma = ConvertFrom-UnixSaniye $Pencere.resets_at
+    $yuzde = [double]$Pencere.used_percentage
+
+    # Sıfırlanma anı geçtiyse pencere gerçekten sıfırlanmıştır — bayat yüzdeyi
+    # göstermeye devam etmek yanıltıcı olur.
+    if ($null -ne $sifirlanma -and $sifirlanma -le [DateTime]::Now) { $yuzde = 0 }
+
+    $YuzdeMetin.Text = ('{0}%' -f [int][Math]::Round($yuzde))
+    $SifirMetin.Text = Format-Kalan $sifirlanma
+    # DIKKAT: [Math]::Min(1, $oran) YAZMAYIN. Literal 1 Int32 olduğu için
+    # PowerShell tamsayı aşırı yüklemesini seçer ve 0.56'yı 1'e yuvarlar —
+    # sonuç: her bar %100 dolu çizilir. Sınırlamayı elle yapıyoruz.
+    $oran = [double]$yuzde / 100.0
+    if ($oran -lt 0.0) { $oran = 0.0 }
+    if ($oran -gt 1.0) { $oran = 1.0 }
+    $Dolgu.Width = $oran * $IZ_GENISLIK
+    $Dolgu.Background = [Windows.Media.BrushConverter]::new().ConvertFromString(
+        (Get-BarRengi -Yuzde $yuzde -Sifirlanma $sifirlanma -BitisDk $BitisDk))
+    Write-Tani ("bar: yuzde={0} izGenislik={1} atanan={2} gercek={3} hizalama={4}" -f `
+        $yuzde, $IZ_GENISLIK, $Dolgu.Width, $Dolgu.ActualWidth, $Dolgu.HorizontalAlignment)
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Eşik aşımı pop-up'ı
+#
+# Açık uyarılar listede tutuluyor: tıklanana kadar durdukları için ikincisi
+# birincinin üstüne değil, üstüne doğru istiflenmeli.
+# ─────────────────────────────────────────────────────────────────────────────
+$script:AcikUyarilar = New-Object System.Collections.ArrayList
+
+[xml]$uyariXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Kullanim uyarisi"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="True" ResizeMode="NoResize"
+        SizeToContent="Height" Width="330" WindowStartupLocation="Manual"
+        UseLayoutRounding="True" TextOptions.TextRenderingMode="ClearType">
+  <Border CornerRadius="14" Background="#F21C1F26" BorderBrush="#59E8A33D" BorderThickness="1"
+          Padding="18,15,18,16">
+    <Border.Effect>
+      <DropShadowEffect BlurRadius="18" ShadowDepth="3" Opacity="0.55" Color="#FF000000"/>
+    </Border.Effect>
+    <StackPanel>
+      <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
+        <TextBlock x:Name="UIkon" FontFamily="Segoe MDL2 Assets" FontSize="16"
+                   VerticalAlignment="Center" Margin="0,0,9,0" Foreground="#E8A33D"/>
+        <TextBlock x:Name="UBaslik" FontFamily="Segoe UI" FontSize="13" FontWeight="SemiBold"
+                   VerticalAlignment="Center" Foreground="#F5F8FC"/>
+      </StackPanel>
+      <TextBlock x:Name="UMetin" FontFamily="Segoe UI" FontSize="11.5" Foreground="#E8EDF5"
+                 Opacity="0.85" TextWrapping="Wrap" Margin="0,0,0,4"/>
+      <TextBlock x:Name="UAlt" FontFamily="Segoe UI" FontSize="10.5" Foreground="#E8EDF5"
+                 Opacity="0.55" TextWrapping="Wrap"/>
+      <Border x:Name="UTamam" HorizontalAlignment="Right" Margin="0,13,0,0" CornerRadius="7"
+              Background="#26FFFFFF" Padding="16,5,16,6">
+        <TextBlock Text="@@TAMAM@@" FontFamily="Segoe UI" FontSize="11" Foreground="#F5F8FC"/>
+      </Border>
+    </StackPanel>
+  </Border>
+</Window>
+'@
+
+function Show-Uyari {
+    param([string]$Etiket, [double]$Yuzde, [Nullable[datetime]]$Sifirlanma, [int]$Esik)
+
+    $u = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $uyariXaml))
+    $u.FindName('UIkon').Text = [char]0xE7BA        # uyarı üçgeni
+    $u.FindName('UBaslik').Text = (T 'UYARI_BASLIK')
+    $u.FindName('UMetin').Text = ((T 'UYARI_METIN') -f $Etiket, $Yuzde, $Esik)
+
+    # Geri sayım DEĞİL, sıfırlanma SAATİ yazıyoruz: pencere tıklanana kadar
+    # açık kalacağı için geri sayım zamanla yanlışa döner, saat dönmez.
+    if ($null -ne $Sifirlanma) {
+        $u.FindName('UAlt').Text = ((T 'UYARI_SIFIRLANMA') -f $Sifirlanma.ToString('d MMMM HH:mm', $Kultur))
+    } else {
+        $u.FindName('UAlt').Text = ''
+    }
+
+    # Kırmızı bölge ise rengi sertleştir
+    if ($Yuzde -ge 90) {
+        $kirmizi = [Windows.Media.BrushConverter]::new().ConvertFromString('#E5484D')
+        $u.FindName('UIkon').Foreground = $kirmizi
+    }
+
+    # İstifleme: ekranın sağ altından yukarı doğru
+    $sira = $script:AcikUyarilar.Count
+    $u.Add_ContentRendered({
+        $u.Left = [System.Windows.SystemParameters]::PrimaryScreenWidth - $u.ActualWidth - 26
+        $u.Top  = [System.Windows.SystemParameters]::PrimaryScreenHeight - $u.ActualHeight - 60 - ($sira * ($u.ActualHeight + 12))
+        # Odak çalmasın: yazı yazarken tuşlarınızı kesmemeli.
+        $h = (New-Object System.Windows.Interop.WindowInteropHelper $u).Handle
+        $ex = [Widget.Win32]::GetWindowLong($h, $GWL_EXSTYLE)
+        [void][Widget.Win32]::SetWindowLong($h, $GWL_EXSTYLE, ($ex -bor $WS_EX_NOACTIVATE -bor $WS_EX_TOOLWINDOW))
+    }.GetNewClosure())
+
+    $kapat = { param($s, $e) $e.Handled = $true; $u.Close() }.GetNewClosure()
+    $u.FindName('UTamam').Add_MouseLeftButtonUp($kapat)
+    $u.Add_MouseLeftButtonUp($kapat)
+    $u.Add_Closed({ [void]$script:AcikUyarilar.Remove($u) }.GetNewClosure())
+
+    [void]$script:AcikUyarilar.Add($u)
+    $u.Show()
+    try { [System.Media.SystemSounds]::Exclamation.Play() } catch { }
+    Write-Tani ("uyari gosterildi: {0} %{1} (esik {2})" -f $Etiket, $Yuzde, $Esik)
+}
+
+function Test-Esik {
+    param($Pencere, [string]$Etiket, [string]$EsikAlan, [string]$AtesliAlan)
+
+    $esik = [int]$script:Ayar.$EsikAlan
+    if ($esik -le 0) { return }                                   # kapalı
+    if (-not $script:VeriTaze) { return }                         # bayat veride uyarma
+    if ($null -eq $Pencere -or $null -eq $Pencere.used_percentage) { return }
+
+    $sifirlanma = ConvertFrom-UnixSaniye $Pencere.resets_at
+    # Sıfırlanma anı geçmişse pencere zaten dönmüştür; eski yüzdeyle uyarmak yanlış.
+    if ($null -ne $sifirlanma -and $sifirlanma -le [DateTime]::Now) { return }
+
+    if ([double]$Pencere.used_percentage -lt $esik) { return }
+
+    # Buradan sonrası yalnızca eşik aşıldığında çalışır — tanı günlüğü ancak
+    # bu noktada yazıyor, yoksa saniyede iki satırla dosyayı boğardı.
+    $anahtar = [int64]$Pencere.resets_at
+    if ($null -ne $script:Ayar.$AtesliAlan -and [int64]$script:Ayar.$AtesliAlan -eq $anahtar) {
+        return                                # bu pencere için zaten uyarıldı
+    }
+    Write-Tani ("esik asildi {0}: %{1} >= {2}, pencere anahtari {3}" -f `
+        $Etiket, $Pencere.used_percentage, $esik, $anahtar)
+
+    # Önce kaydet, sonra göster: pencere gösterimi hata verse bile aynı pencere
+    # için tekrar tekrar uyarı çıkmasın.
+    $script:Ayar.$AtesliAlan = $anahtar
+    Save-Ayarlar -Ayar $script:Ayar
+    Show-Uyari -Etiket $Etiket -Yuzde ([double]$Pencere.used_percentage) -Sifirlanma $sifirlanma -Esik $esik
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tüketim hızı uyarısı
+# ─────────────────────────────────────────────────────────────────────────────
+function Update-Hiz {
+    param($BitisDk)
+
+    $HizUyari.Visibility = 'Collapsed'
+    if ($null -eq $BitisDk -or $null -eq $script:Veri) { return }
+
+    $sifirlanma = ConvertFrom-UnixSaniye $script:Veri.five_hour.resets_at
+    if ($null -eq $sifirlanma) { return }
+
+    $kalanDk = ($sifirlanma - [DateTime]::Now).TotalMinutes
+    # Uyarı yalnızca limit sıfırlanmadan ÖNCE bitecekse anlamlı; aksi hâlde
+    # "bu hızla biter" demek gereksiz korkutur.
+    if ($kalanDk -le 0 -or [int]$BitisDk -ge $kalanDk) { return }
+
+    $HizUyari.Text = ((T 'HIZ_UYARI') -f (Format-Sure ([int]$BitisDk)))
+    $HizUyari.Visibility = 'Visible'
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Son 7 gün grafiği
+# ─────────────────────────────────────────────────────────────────────────────
+function Update-Hafta {
+    if ($null -eq $script:Veri -or
+        -not ($script:Veri.PSObject.Properties.Name -contains 'haftalik') -or
+        $null -eq $script:Veri.haftalik -or $script:Veri.haftalik.Count -lt 7) {
+        $HaftaBolum.Visibility = 'Collapsed'
+        return
+    }
+
+    $gunler = @($script:Veri.haftalik)
+    $enBuyuk = ($gunler | ForEach-Object { [double]$_.tuketim } | Measure-Object -Maximum).Maximum
+    Write-Tani ("hafta: enBuyuk={0} degerler={1}" -f $enBuyuk, (($gunler | ForEach-Object { $_.tuketim }) -join ','))
+    if ($enBuyuk -le 0) { $HaftaBolum.Visibility = 'Collapsed'; return }
+
+    $bugun = [DateTime]::Now.ToString('yyyy-MM-dd')
+
+    for ($i = 0; $i -lt 7; $i++) {
+        $g = $gunler[$i]
+        $tuketim = [double]$g.tuketim
+        # Yükseklik en büyük güne göre ölçekli; sıfır olsa bile 2px iz kalsın.
+        $CUBUKLAR[$i].Height = [Math]::Max(2.0, ($tuketim / $enBuyuk) * 26.0)
+
+        $tarih = [datetime]::ParseExact($g.gun, 'yyyy-MM-dd', $null)
+        $ETIKETLER[$i].Text = Get-GunKisa -Gun $tarih.DayOfWeek.ToString()
+
+        $buGunMu = ($g.gun -eq $bugun)
+        $CUBUKLAR[$i].Background = [Windows.Media.BrushConverter]::new().ConvertFromString(
+            $(if ($buGunMu) { '#4C8DF6' } else { '#3D5E8C' }))
+        $ETIKETLER[$i].Opacity = $(if ($buGunMu) { 0.85 } else { 0.4 })
+    }
+
+    # Bugünün tüketimi "5 saatlik pencere" cinsinden: 100 puan = 1 tam pencere.
+    $bugunVeri = $gunler | Where-Object { $_.gun -eq $bugun }
+    if ($bugunVeri) {
+        $BugunOzet.Text = ((T 'BUGUN') -f ([double]$bugunVeri.tuketim / 100))
+    } else {
+        $BugunOzet.Text = ''
+    }
+
+    $HaftaBolum.Visibility = 'Visible'
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Olay satırı (Stop / Notification hook'ları)
+# ─────────────────────────────────────────────────────────────────────────────
+$IKON_ONAY    = [char]0xE73E   # ✓
+$IKON_BEKLE   = [char]0xE823   # kum saati
+
+function Update-Olay {
+    if (-not (Test-Path $OlayDosya)) { $OlayKutu.Visibility = 'Collapsed'; return }
+
+    try {
+        $o = Get-Content $OlayDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        return   # yarım yazılmış dosya — bir sonraki turda tekrar denenir
+    }
+
+    $zaman = ConvertFrom-UnixSaniye ([int64]$o.zaman / 1000)
+    if ($null -eq $zaman) { $OlayKutu.Visibility = 'Collapsed'; return }
+
+    $yasSn = ([DateTime]::Now - $zaman).TotalSeconds
+    if ($yasSn -gt $OLAY_OMUR_SN -or $yasSn -lt -60) {
+        $OlayKutu.Visibility = 'Collapsed'
+        return
+    }
+
+    $alt = @()
+
+    if ($o.tur -eq 'bitti') {
+        $renk = '#3BD16F'                     # yeşil
+        $ikon = $IKON_ONAY
+        $metin = (T 'OLAY_BITTI')
+
+        # Satır sayısı statusLine'ın yazdığı oturum bloğundan, olay ise hook'tan
+        # gelir — İKİSİ FARKLI OTURUMA AİT OLABİLİR. Bayat bir sayıyı ya da başka
+        # projenin sayısını taze olayın altına koymak yanıltıcıdır: widget
+        # "B projesi bitirdi · +501" diyebiliyordu ama o 501 satır saatler önceki
+        # A projesi oturumundan kalmaydı. Bu yüzden iki koşul birden aranıyor:
+        # veri taze OLACAK ve aynı projeye ait OLACAK.
+        if ($null -ne $script:Veri -and $null -ne $script:Veri.oturum) {
+            $veriTaze = $false
+            if ($null -ne $script:Veri.yazildi) {
+                $vy = ConvertFrom-UnixSaniye ([int64]$script:Veri.yazildi / 1000)
+                if ($null -ne $vy) { $veriTaze = ((([DateTime]::Now - $vy).TotalSeconds) -le $BAYAT_SN) }
+            }
+
+            $ayniProje = $false
+            if ($null -ne $script:Veri.oturum.dizin -and $null -ne $o.dizin) {
+                $ayniProje = ((Split-Path $script:Veri.oturum.dizin -Leaf) -eq $o.dizin)
+            }
+
+            if ($veriTaze -and $ayniProje) {
+                $ek = [int]$script:Veri.oturum.satirEkli
+                $sil = [int]$script:Veri.oturum.satirSilinen
+                if ($ek -gt 0 -or $sil -gt 0) { $alt += ('+{0} −{1}' -f $ek, $sil) }
+            }
+        }
+    } else {
+        $renk = '#E8A33D'                     # amber
+        $ikon = $IKON_BEKLE
+        $metin = switch ($o.tip) {
+            'permission_prompt' { (T 'OLAY_IZIN') }
+            'idle_prompt'       { (T 'OLAY_GIRDI') }
+            'agent_needs_input' { (T 'OLAY_AJAN_GIRDI') }
+            'agent_completed'   { (T 'OLAY_AJAN_BITTI') }
+            default             { (T 'OLAY_BEKLIYOR') }
+        }
+    }
+
+    # Üst satır: ne olduğu + ne zaman. Alt satır: ayrıntı (satır sayısı, dizin).
+    $metin = '{0}  ·  {1}' -f $metin, (Format-Yas $zaman)
+    if ($o.dizin) { $alt += $o.dizin }
+
+    $firca = [Windows.Media.BrushConverter]::new().ConvertFromString($renk)
+    $OlayIkon.Text = $ikon
+    $OlayIkon.Foreground = $firca
+    $OlayMetin.Text = $metin
+    $OlayAlt.Text = ($alt -join '  ·  ')
+    $OlayAlt.Visibility = if ($alt.Count -gt 0) { 'Visible' } else { 'Collapsed' }
+    $OlayKutu.Visibility = 'Visible'
+
+    # İlk saniyelerde yanıp sönsün — başka pencerede çalışırken göz ucuyla yakalanır.
+    if ($yasSn -lt $YANIP_SONME_SN) {
+        $acik = ([int][Math]::Floor($yasSn * 2)) % 2 -eq 0
+        $arka = if ($acik) { $renk.Replace('#', '#4C') } else { $renk.Replace('#', '#1F') }
+        $OlayKutu.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($arka)
+    } else {
+        $OlayKutu.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($renk.Replace('#', '#1F'))
+    }
+}
+
+function Update-Gorunum {
+    Read-Durum
+    Update-Olay
+
+    if ($null -eq $script:Veri) {
+        $Kok.Opacity = 1.0
+        $Yas.Text = ''
+        $Uyari.Visibility = 'Visible'
+        $Uyari.Text = (T 'VERI_YOK')
+        Update-Bar $null $Yuzde5 $Sifir5 $Dolgu5
+        Update-Bar $null $YuzdeH $SifirH $DolguH
+        return
+    }
+
+    $Uyari.Visibility = 'Collapsed'
+
+    $yazildi = ConvertFrom-UnixSaniye ([int64]$script:Veri.yazildi / 1000)
+    if ($null -ne $yazildi) {
+        $yasSn = ([DateTime]::Now - $yazildi).TotalSeconds
+        $script:VeriTaze = ($yasSn -le $BAYAT_SN)
+        # Bayat veri: soluklaştır ve yaşını yaz — güncel sanıp bakmayalım.
+        if ($yasSn -gt $BAYAT_SN) {
+            $Kok.Opacity = 0.45
+            $Yas.Text = Format-Yas $yazildi
+        } else {
+            $Kok.Opacity = 1.0
+            $Yas.Text = (T 'CANLI')
+        }
+
+        # Uzun süredir beslenmiyorsa SEBEBİNİ de söyle. Yalnızca soluklaşmak
+        # "widget bozuldu mu?" sorusunu doğuruyor; asıl sebep veri kaynağının
+        # yalnızca terminal oturumunda çalışması.
+        if ($yasSn -gt $COK_BAYAT_SN) {
+            $Uyari.Text = (T 'VERI_BAYAT')
+            $Uyari.Visibility = 'Visible'
+        }
+    }
+
+    # Tüketim hızı yalnızca 5 saatlik pencere için hesaplanıyor.
+    $bitisDk = $null
+    if ($script:Veri.PSObject.Properties.Name -contains 'hiz' -and $null -ne $script:Veri.hiz) {
+        $bitisDk = [int]$script:Veri.hiz.bitisDk
+    }
+
+    Update-Bar $script:Veri.five_hour $Yuzde5 $Sifir5 $Dolgu5 $bitisDk
+    Update-Bar $script:Veri.seven_day $YuzdeH $SifirH $DolguH
+
+    Update-Hiz $bitisDk
+    Update-Hafta
+
+    Test-Esik $script:Veri.five_hour (T 'ESIK_5SAAT') 'esik5' 'atesli5'
+    Test-Esik $script:Veri.seven_day (T 'ESIK_HAFTA') 'esikH' 'atesliH'
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Masaüstü seviyesi (saat widget'ı ile aynı yaklaşım)
+# ─────────────────────────────────────────────────────────────────────────────
+function Get-Tutamac { return (New-Object System.Windows.Interop.WindowInteropHelper $win).Handle }
+
+function Set-MasaustuSeviyesi {
+    $hwnd = Get-Tutamac
+    if ($hwnd -eq [IntPtr]::Zero) { return }
+    $ex = [Widget.Win32]::GetWindowLong($hwnd, $GWL_EXSTYLE)
+    [void][Widget.Win32]::SetWindowLong($hwnd, $GWL_EXSTYLE, ($ex -bor $WS_EX_TOOLWINDOW -bor $WS_EX_NOACTIVATE))
+
+    # Bundan sonrasını mesaj kancası hallediyor — periyodik yoklama YOK.
+    [ZDuzeni]::Bagla($hwnd)
+    Push-Dibe
+}
+
+# Yalnızca başlangıçta bir kez çağrılır. Düzenli aralıkla çağırmayın:
+# masaüstü sağ tık menüsünü kapatır ve simge seçimini bozar.
+function Push-Dibe {
+    $hwnd = Get-Tutamac
+    if ($hwnd -eq [IntPtr]::Zero) { return }
+    if ([Widget.Win32]::IsIconic($hwnd)) { [void][Widget.Win32]::ShowWindow($hwnd, $SW_SHOWNOACTIVATE) }
+    [void][Widget.Win32]::SetWindowPos($hwnd, $HWND_BOTTOM, 0, 0, 0, 0,
+        ($SWP_NOMOVE -bor $SWP_NOSIZE -bor $SWP_NOACTIVATE))
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Konum + sürükleme
+# ─────────────────────────────────────────────────────────────────────────────
+function Get-DpiOlcegi {
+    $k = [System.Windows.PresentationSource]::FromVisual($win)
+    if ($null -ne $k -and $null -ne $k.CompositionTarget) { return $k.CompositionTarget.TransformToDevice.M11 }
+    return 1.0
+}
+
+$script:KonumSol = 0.0
+$script:KonumUst = 0.0
+
+function Set-PencereKonumu {
+    param([double]$Sol, [double]$Ust)
+    $script:KonumSol = $Sol
+    $script:KonumUst = $Ust
+    $win.Left = $Sol
+    $win.Top  = $Ust
+}
+
+function Set-VarsayilanKonum {
+    $win.UpdateLayout()
+    $g = if ([double]::IsNaN($win.ActualWidth) -or $win.ActualWidth -le 0) { 300 } else { $win.ActualWidth }
+    Set-PencereKonumu -Sol ([Math]::Max(0, [System.Windows.SystemParameters]::PrimaryScreenWidth - $g - 28)) -Ust 190
+}
+
+$script:surukle = $null
+
+$win.Add_MouseLeftButtonDown({
+    $p = New-Object 'Widget.Win32+POINT'
+    if ([Widget.Win32]::GetCursorPos([ref]$p)) {
+        $script:surukle = @{ mx = $p.X; my = $p.Y; sol = $script:KonumSol; ust = $script:KonumUst }
+        [void]$win.CaptureMouse()
+    }
+})
+
+$win.Add_MouseMove({
+    if ($null -ne $script:surukle) {
+        $p = New-Object 'Widget.Win32+POINT'
+        if ([Widget.Win32]::GetCursorPos([ref]$p)) {
+            $olcek = Get-DpiOlcegi
+            Set-PencereKonumu -Sol ($script:surukle.sol + ($p.X - $script:surukle.mx) / $olcek) `
+                              -Ust ($script:surukle.ust + ($p.Y - $script:surukle.my) / $olcek)
+        }
+    }
+})
+
+$win.Add_MouseLeftButtonUp({
+    if ($null -ne $script:surukle) {
+        $win.ReleaseMouseCapture()
+        $script:surukle = $null
+        $script:Ayar.sol = $script:KonumSol
+        $script:Ayar.ust = $script:KonumUst
+        Save-Ayarlar -Ayar $script:Ayar
+    }
+})
+
+(Get-Ogesi 'MnuBgYok').Add_Click({   Set-ArkaPlan 'yok';   Save-Ayarlar -Ayar $script:Ayar })
+(Get-Ogesi 'MnuBgHafif').Add_Click({ Set-ArkaPlan 'hafif'; Save-Ayarlar -Ayar $script:Ayar })
+(Get-Ogesi 'MnuBgKoyu').Add_Click({  Set-ArkaPlan 'koyu';  Save-Ayarlar -Ayar $script:Ayar })
+
+# Eşik menüleri kodla üretiliyor — XAML'e 18 satır elle yazmak yerine tek
+# kaynaktan. Widget klavye odağı almadığı için sayı YAZILAMAZ; seçenekler
+# hazır listeden tıklanır.
+$ESIK_SECENEKLERI = @(0, 50, 60, 70, 75, 80, 85, 90, 95)
+
+function Build-EsikMenusu {
+    param($Kok, [string]$EsikAlan)
+
+    $Kok.Items.Clear()
+    foreach ($deger in $ESIK_SECENEKLERI) {
+        $mi = New-Object System.Windows.Controls.MenuItem
+        $mi.Header = $(if ($deger -eq 0) { (T 'MENU_KAPALI') } else { "$deger%" })
+        $mi.IsCheckable = $true
+        $mi.IsChecked = ([int]$script:Ayar.$EsikAlan -eq $deger)
+        $mi.Tag = $deger
+        $mi.Add_Click({
+            param($s, $e)
+            $yeni = [int]$s.Tag
+            $script:Ayar.$EsikAlan = $yeni
+            # Eşik değişince "zaten uyarıldı" durumu sıfırlanır: yeni eşik yeni
+            # bir soru demektir, eski cevabı taşımak yanlış olur.
+            $script:Ayar.$($EsikAlan -replace '^esik', 'atesli') = $null
+            Save-Ayarlar -Ayar $script:Ayar
+            Build-EsikMenusu -Kok $Kok -EsikAlan $EsikAlan
+        }.GetNewClosure())
+        [void]$Kok.Items.Add($mi)
+    }
+}
+
+Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsik5') -EsikAlan 'esik5'
+Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsikH') -EsikAlan 'esikH'
+
+(Get-Ogesi 'MnuSifirla').Add_Click({
+    Set-VarsayilanKonum
+    $script:Ayar.sol = $script:KonumSol
+    $script:Ayar.ust = $script:KonumUst
+    Save-Ayarlar -Ayar $script:Ayar
+})
+
+(Get-Ogesi 'MnuKapat').Add_Click({ $win.Close() })
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sağ tık menüsü kapatma nöbetçisi
+#
+# Pencere WS_EX_NOACTIVATE ile çalıştığı için hiçbir zaman odak almıyor.
+# WPF'in "dışarı tıklanınca menüyü kapat" mekanizması ise tam olarak odak /
+# fare yakalama kaybına dayanıyor — bizde o olay hiç gerçekleşmediğinden menü
+# ekranda asılı kalıyordu. Çözüm: menü açıkken fareyi yoklayıp dışarıdaki ilk
+# tıklamada menüyü elle kapatmak.
+#
+# "Dışarısı" = tıklanan noktadaki pencere BİZE ait değilse. Alt menüler de
+# bizim sürecimize ait ayrı pencereler olduğu için bu ölçüt onları yanlışlıkla
+# kapatmaz; widget'ın kendisine tıklamak ise kapatır.
+# ─────────────────────────────────────────────────────────────────────────────
+$script:OncekiBasili = $true
+
+$menuIzleyici = New-Object System.Windows.Threading.DispatcherTimer
+$menuIzleyici.Interval = [TimeSpan]::FromMilliseconds(100)
+$menuIzleyici.Add_Tick({
+    $menu = $win.ContextMenu
+    if ($null -eq $menu -or -not $menu.IsOpen) { $menuIzleyici.Stop(); return }
+
+    $basili = ((([Widget.Win32]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0) -or
+               (([Widget.Win32]::GetAsyncKeyState(0x02) -band 0x8000) -ne 0))
+
+    # Yalnızca basılı-değilden basılıya GEÇİŞ sayılır; basılı tutmak tekrar
+    # tetiklemesin.
+    if ($basili -and -not $script:OncekiBasili) {
+        $p = New-Object 'Widget.Win32+POINT'
+        if ([Widget.Win32]::GetCursorPos([ref]$p)) {
+            $h = [Widget.Win32]::WindowFromPoint($p)
+            $sahip = 0
+            [void][Widget.Win32]::GetWindowThreadProcessId($h, [ref]$sahip)
+            if ($sahip -ne $PID -or $h -eq (Get-Tutamac)) {
+                $menu.IsOpen = $false
+                Write-Tani 'menu disariya tiklandigi icin kapatildi'
+            }
+        }
+    }
+    $script:OncekiBasili = $basili
+})
+
+$win.ContextMenu.Add_Opened({
+    # Menüyü açan sağ tık hâlâ basılı olabilir; ilk turda tıklama sayılmasın.
+    $script:OncekiBasili = $true
+    $menuIzleyici.Start()
+})
+$win.ContextMenu.Add_Closed({ $menuIzleyici.Stop() })
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Zamanlayıcılar
+# ─────────────────────────────────────────────────────────────────────────────
+$veriTimer = New-Object System.Windows.Threading.DispatcherTimer
+$veriTimer.Interval = [TimeSpan]::FromSeconds(1)
+$veriTimer.Add_Tick({
+    try { Update-Gorunum } catch { Write-Tani ("HATA Update-Gorunum: " + $_.Exception.Message) }
+})
+
+# Win+D ("masaüstünü göster") pencereyi küçültür. Yoklama yerine olayı
+# dinliyoruz — küçültüldüğü anda geri aç.
+$win.Add_StateChanged({
+    if ($win.WindowState -eq [System.Windows.WindowState]::Minimized) {
+        $win.WindowState = [System.Windows.WindowState]::Normal
+    }
+})
+
+Set-ArkaPlan $script:Ayar.arkaPlan
+Update-Gorunum
+
+$win.Add_SourceInitialized({
+    if ($null -ne $script:Ayar.sol -and $null -ne $script:Ayar.ust) {
+        Set-PencereKonumu -Sol ([double]$script:Ayar.sol) -Ust ([double]$script:Ayar.ust)
+    } else {
+        Set-VarsayilanKonum
+    }
+})
+
+$win.Add_ContentRendered({
+    Set-MasaustuSeviyesi
+    $veriTimer.Start()
+    # Not: eşik menüsünü programla açıp (ContextMenu.IsOpen) doğrulamayı
+    # denemeyin — odak alamayan pencerede menü açılıp süreci düşürüyor.
+    # Menü içeriği kurulumda Build-EsikMenusu ile üretiliyor; hata olsaydı
+    # StrictMode altında betik hiç başlamazdı.
+})
+
+$win.Add_Closed({ $veriTimer.Stop() })
+
+[void]$win.ShowDialog()

@@ -1,0 +1,9 @@
+# Gelistirme gunlugu yayimlanmiyor (kisisel proje adlari ve kullanim verisi icerir)
+CHANGELOG.md
+
+# Windows / editor artiklari
+Thumbs.db
+desktop.ini
+*.log
+.vscode/
+.idea/
