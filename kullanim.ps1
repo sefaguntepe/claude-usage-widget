@@ -926,6 +926,32 @@ $win.Add_MouseLeftButtonUp({
 # hazır listeden tıklanır.
 $ESIK_SECENEKLERI = @(0, 50, 60, 70, 75, 80, 85, 90, 95)
 
+# TUZAK: Bu gövde bilerek ayrı bir fonksiyonda duruyor.
+#
+# Menü tıklama işleyicisi .GetNewClosure() ile kuruluyor ve closure YENİ BİR
+# MODÜL KAPSAMINA bağlanıyor — orada `$script:` artık betiğin script kapsamı
+# değildir. Closure içinde `$script:Ayar.esikH = 85` yazmak aslında
+# `$null.esikH = 85` demekti ve widget çöküyordu:
+#   "The property 'esikH' cannot be found on this object."
+#
+# Closure artık yalnızca yerel değişkenleri ($EsikAlan, $Kok) taşıyıp bu
+# fonksiyonu çağırıyor; `$script:` erişimi normal betik kapsamında kalıyor.
+function Set-EsikDegeri {
+    param([string]$Alan, [int]$Deger, $Kok)
+
+    $script:Ayar.$Alan = $Deger
+
+    # Eşik değişince "zaten uyarıldı" durumu sıfırlanır: yeni eşik yeni bir
+    # soru demektir, eski cevabı taşımak yanlış olur.
+    $atesliAlan = $Alan -replace '^esik', 'atesli'
+    $script:Ayar.$atesliAlan = $null
+    Save-Ayarlar -Ayar $script:Ayar
+
+    # Menüyü yeniden KURMUYORUZ: tıklanan öğe hâlâ olayı işliyor, Items.Clear()
+    # onu koparır. Yalnızca işaretleri güncellemek yeterli.
+    foreach ($oge in $Kok.Items) { $oge.IsChecked = ([int]$oge.Tag -eq $Deger) }
+}
+
 function Build-EsikMenusu {
     param($Kok, [string]$EsikAlan)
 
@@ -938,13 +964,7 @@ function Build-EsikMenusu {
         $mi.Tag = $deger
         $mi.Add_Click({
             param($s, $e)
-            $yeni = [int]$s.Tag
-            $script:Ayar.$EsikAlan = $yeni
-            # Eşik değişince "zaten uyarıldı" durumu sıfırlanır: yeni eşik yeni
-            # bir soru demektir, eski cevabı taşımak yanlış olur.
-            $script:Ayar.$($EsikAlan -replace '^esik', 'atesli') = $null
-            Save-Ayarlar -Ayar $script:Ayar
-            Build-EsikMenusu -Kok $Kok -EsikAlan $EsikAlan
+            Set-EsikDegeri -Alan $EsikAlan -Deger ([int]$s.Tag) -Kok $Kok
         }.GetNewClosure())
         [void]$Kok.Items.Add($mi)
     }
@@ -1041,6 +1061,21 @@ $win.Add_SourceInitialized({
 $win.Add_ContentRendered({
     Set-MasaustuSeviyesi
     $veriTimer.Start()
+
+    # Öz-test (KULLANIM_ESIKTEST=1): eşik menüsü öğesine GERÇEKTEN tıklar.
+    # Bu yol daha önce sınanmamıştı ve closure kapsam hatası yüzünden widget'ı
+    # çökertiyordu; regresyon buradan yakalanır.
+    if ($env:KULLANIM_ESIKTEST -eq '1') {
+        try {
+            $hedef = (Get-Ogesi 'MnuEsikH').Items | Where-Object { [int]$_.Tag -eq 85 } | Select-Object -First 1
+            Write-Tani ("OZTEST once : esikH=$($script:Ayar.esikH) hedefVar=$($null -ne $hedef)")
+            $hedef.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.MenuItem]::ClickEvent)))
+            $isaretli = ((Get-Ogesi 'MnuEsikH').Items | Where-Object { $_.IsChecked } | ForEach-Object { $_.Tag }) -join ','
+            Write-Tani ("OZTEST sonra: esikH=$($script:Ayar.esikH) atesliH=$($script:Ayar.atesliH) isaretli=$isaretli")
+        } catch {
+            Write-Tani ("OZTEST HATA: " + $_.Exception.Message)
+        }
+    }
     # Not: eşik menüsünü programla açıp (ContextMenu.IsOpen) doğrulamayı
     # denemeyin — odak alamayan pencerede menü açılıp süreci düşürüyor.
     # Menü içeriği kurulumda Build-EsikMenusu ile üretiliyor; hata olsaydı
