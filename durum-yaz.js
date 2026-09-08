@@ -224,6 +224,35 @@ function hizHesapla(g, f5) {
   return { yuzdeDk: Math.round(yuzdeDk * 1000) / 1000, bitisDk: Math.round((100 - f5) / yuzdeDk) };
 }
 
+/* rate_limits CANLI BIR SORGU DEGIL: o oturumun son API yanitindan kalma bir
+   fotograftir. Claude Code onu onbellekte tutar ve refreshInterval her
+   tetiklendiginde AYNI fotografi yeniden gonderir. Iki sonucu var:
+     a) Boste bekleyen bir oturum dosyayi tazeler ama degerleri tazelemez —
+        widget "canli" derken sayilar donmus olabilir.
+     b) Ayni dosyaya birden fazla oturum yazar; boste olan, aktif olanin taze
+        degerini kendi eski fotografiyla ezer.
+
+   Ikisini de tek kural cozer: AYNI PENCEREDE YUZDE DUSEMEZ (kota geri gelmez).
+   Dusen bir deger eski bir fotograftir ve reddedilir. Yalnizca ileri giden ya
+   da yeni pencereden gelen veri kabul edilir; kabul edilince "olcum zamani"
+   simdi olarak isaretlenir. */
+function pencereBirlestir(eskiP, yeniP) {
+  if (!yeniP || typeof yeniP.used_percentage !== 'number') {
+    return { p: eskiP || null, degisti: false };
+  }
+  if (!eskiP || typeof eskiP.used_percentage !== 'number') {
+    return { p: yeniP, degisti: true };
+  }
+
+  const eskiR = eskiP.resets_at || 0;
+  const yeniR = yeniP.resets_at || 0;
+
+  if (yeniR > eskiR) return { p: yeniP, degisti: true };    // yeni pencere
+  if (yeniR < eskiR) return { p: eskiP, degisti: false };   // onceki pencerenin fotografi
+  if (yeniP.used_percentage > eskiP.used_percentage) return { p: yeniP, degisti: true };
+  return { p: eskiP, degisti: false };                      // esit veya dusuk -> eski fotograf
+}
+
 function haftalikOzet(g) {
   const liste = [];
   for (let i = 6; i >= 0; i--) {
@@ -274,27 +303,42 @@ function main() {
   }
 
   const rl = d.rate_limits;
-  const f5 = rl && rl.five_hour && typeof rl.five_hour.used_percentage === 'number'
-    ? rl.five_hour.used_percentage : null;
-  const d7 = rl && rl.seven_day && typeof rl.seven_day.used_percentage === 'number'
-    ? rl.seven_day.used_percentage : null;
 
-  let hiz = null;
-  let haftalik = [];
-  if (f5 !== null) {
-    const g = gecmisIsle(f5, d7);
-    hiz = hizHesapla(g, f5);
-    haftalik = haftalikOzet(g);
-  }
+  // Gelen fotografi dosyadakiyle BIRLESTIR; eskiyse reddedilir. Gecmis
+  // ornekleme ve hiz hesabi da birlesmis (geriye gitmeyen) degerlerle yapilir,
+  // yoksa boste bir oturumun dusuk fotografi gunluk toplami bozardi.
+  let f5 = null, d7 = null;
 
-  // rate_limits yalnizca ilk API yanitindan sonra gelir; yoksa eski ama
-  // gecerli veriyi bos veriyle ezmemek icin dosyaya dokunmuyoruz.
   if (rl && (rl.five_hour || rl.seven_day)) {
+    const eski = jsonOku(DOSYA, null);
+    const simdi = Date.now();
+
+    const b5 = pencereBirlestir(eski && eski.five_hour, rl.five_hour);
+    const b7 = pencereBirlestir(eski && eski.seven_day, rl.seven_day);
+    const degisti = b5.degisti || b7.degisti;
+
+    // Olcum zamani: degerlerin en son GERCEKTEN degistigi an — dosyanin
+    // yazildigi an degil. Widget tazeligi buna gore hesaplar.
+    const olcumZamani = degisti ? simdi
+      : ((eski && eski.olcumZamani) || (eski && eski.yazildi) || simdi);
+
+    f5 = b5.p && typeof b5.p.used_percentage === 'number' ? b5.p.used_percentage : null;
+    d7 = b7.p && typeof b7.p.used_percentage === 'number' ? b7.p.used_percentage : null;
+
+    let hiz = null;
+    let haftalik = [];
+    if (f5 !== null) {
+      const g = gecmisIsle(f5, d7);
+      hiz = hizHesapla(g, f5);
+      haftalik = haftalikOzet(g);
+    }
+
     const c = d.cost || {};
     jsonYaz(DOSYA, {
-      yazildi: Date.now(),
-      five_hour: rl.five_hour || null,
-      seven_day: rl.seven_day || null,
+      yazildi: simdi,
+      olcumZamani: olcumZamani,
+      five_hour: b5.p,
+      seven_day: b7.p,
       hiz: hiz,
       haftalik: haftalik,
       oturum: {

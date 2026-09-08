@@ -803,7 +803,16 @@ function Update-Gorunum {
 
     $Uyari.Visibility = 'Collapsed'
 
-    $yazildi = ConvertFrom-UnixSaniye ([int64]$script:Veri.yazildi / 1000)
+    # Tazelik ölçütü dosyanın YAZILDIĞI an değil, değerlerin ÖLÇÜLDÜĞÜ an.
+    # rate_limits o oturumun son API yanıtından kalma bir fotoğraf; boşta duran
+    # bir oturum dosyayı 15 saniyede bir yazıp aynı fotoğrafı gönderebiliyor —
+    # yazma zamanına bakmak "canlı" yalanı üretirdi.
+    $olcumMs = $script:Veri.yazildi
+    if ($script:Veri.PSObject.Properties.Name -contains 'olcumZamani' -and
+        $null -ne $script:Veri.olcumZamani) {
+        $olcumMs = $script:Veri.olcumZamani
+    }
+    $yazildi = ConvertFrom-UnixSaniye ([int64]$olcumMs / 1000)
     if ($null -ne $yazildi) {
         $yasSn = ([DateTime]::Now - $yazildi).TotalSeconds
         $script:VeriTaze = ($yasSn -le $BAYAT_SN)

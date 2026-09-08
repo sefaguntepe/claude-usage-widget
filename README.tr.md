@@ -169,10 +169,19 @@ görürse dokunmadan durur ve başkasına ait hook girişlerini korur (yalnızca
 1. **Yalnızca 2 pencere gösterilebilir.** Claude Code `five_hour` ve
    `seven_day` veriyor; `/usage` ekranındaki model-bazlı üçüncü satır
    ("Weekly · Fable" gibi) hiçbir yerel kaynakta yok.
-2. **Veri yalnızca TERMİNAL (CMD) Claude Code oturumunda tazelenir.**
-   Masaüstü uygulaması (Code sekmesi) statusLine'ı çalıştırmıyor — hook'lar
-   çalışır ama limit yüzdeleri gelmez. Yani günlerce masaüstü uygulamasında
-   çalışırsanız yüzdeler donar. Widget bunu 12 saat sonra açıkça yazar.
+2. **Yüzdeler yalnızca terminal (CMD) oturumunda ÇALIŞIRKEN ilerler.**
+   İki ayrı sebep var:
+
+   1. Masaüstü uygulaması statusLine betiklerini hiç çalıştırmıyor.
+   2. `rate_limits` **canlı bir sorgu değil** — o oturumun son API yanıtından
+      kalma bir fotoğraf. Claude Code onu önbellekte tutar ve statusline her
+      çalıştığında aynı değerleri yeniden gönderir; yani **boşta duran** bir
+      oturum dosyayı tazeler ama sayılar kıpırdamaz.
+
+   (2) yüzünden boşta bir oturum açık bırakmak işe yaramaz. Widget, dosyanın
+   yazıldığı anı değil değerlerin **ölçüldüğü** anı takip eder: boşta oturumda
+   "canlı" değil "12 dk önce" yazar. Bayat barlar griye döner, yaş etiketi
+   amber olur.
    *(Masaüstü oturumları için alternatif yerel kaynak yok — limit verisi
    hiçbir dosyaya yazılmıyor.)*
 3. **Veri sadece Claude Code açıkken tazelenir.** Oturum kapalıyken widget son

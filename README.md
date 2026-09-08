@@ -80,10 +80,19 @@ Check the current state any time with `node statusline.js durum`.
 
 ## Important limitation — read this first
 
-**The numbers only refresh in a terminal Claude Code session.** The desktop app
-does not run status line scripts, so if you work only there, the percentages
-freeze. The widget detects this and says so after 12 hours instead of leaving
-you with a stale number.
+**The numbers only advance while you are working in a terminal Claude Code
+session.** Two separate facts cause this:
+
+1. The desktop app does not run status line scripts at all.
+2. `rate_limits` is **not a live query** — it is a snapshot from that session's
+   last API response. Claude Code caches it and re-sends the same values every
+   time the status line runs, so an *idle* terminal session keeps rewriting the
+   file with values that never move.
+
+Because of (2), leaving an idle session open does not help. The widget tracks
+when the values were last **measured** rather than when the file was last
+written, so an idle session shows "12 min ago", not "live". Stale bars turn
+grey and the age label turns amber.
 
 There is no workaround: no local file holds this data, and the hook payload
 does not include rate limits. The only alternative would be calling the API
