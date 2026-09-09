@@ -45,6 +45,13 @@ uç noktasını sorgular (tepsi/plan kullanımı özelliği için) ve sonucu
 { "t": 1788923411336, "org": "…", "u": { "fh": 30, "sd": 94 } }
 ```
 
+Yoklama sıklığı uygulamanın kodundan: normalde **15 dk**; tepsideki kullanım
+penceresi açıldıktan sonraki 30 dk boyunca **5 dk**; kullanıcı 10 dk boştaysa
+durur. Widget bu yüzden masaüstü verisine "canlı" demez, gerçek yaşını yazar:
+`masaüstü · 7 dk önce`. Hook'lar masaüstünde de ateşlendiği için, son ölçümden
+sonra Claude bir tur bitirmişse 5 saatlik yüzdenin yanına **▲** gelir — "en az
+bu kadar, muhtemelen yüksek"; sayı uydurulmaz.
+
 `fh` = 5 saatlik %, `sd` = haftalık %. Widget bu dosyayı yalnızca **okur**:
 kimlik bilgisi yok, ağ isteği yok, yazma yok. İki kaynak da aynı API'nin
 fotoğrafı; **ölçüm zamanı daha yeni olan kazanır.** Doğrulama: statusLine ile

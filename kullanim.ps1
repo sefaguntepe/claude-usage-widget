@@ -137,7 +137,7 @@ $COK_BAYAT_SN  = 43200  # 12 saatten eskiyse sebebini de yaz
 # olmalı. 232 + 2×18 kapsül dolgusu = 268 → masaüstü saat widget'ı ile aynı en.
 $IZ_GENISLIK = 232.0
 $BAYAT_SN    = 300      # 5 dk'dan eski veri "bayat" sayılır
-$MASAUSTU_BAYAT_SN = 1500   # masaüstü 15 dk'da bir örnekler; 25 dk'ya kadar taze
+$MASAUSTU_BAYAT_SN = 1200   # masaüstü 15 dk'da bir örnekler (+5 dk pay); ötesi bayat
 $MASAUSTU_HIZ_DK   = 60     # tüketim hızı için geriye bakış (15 dk'lık örneklerle 45 dk çok dar)
 
 $ArkaPlanlar = @{ yok = '#00000000'; hafif = '#59000000'; koyu = '#A6000000' }
@@ -241,6 +241,7 @@ $METINLER = @{
         SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
         SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'; KAYNAK_MASAUSTU='masaüstü'
+        SONRASI_KULLANIM='Ölçümden sonra Claude en az bir tur bitirdi — gerçek değer bundan yüksek.'
         SIFIRLANDI='sıfırlandı'; BIRAZDAN='birazdan sıfırlanır'
         KALAN_DK='{0} dk sonra'; KALAN_SADK='{0} sa {1} dk sonra'
         YAS_SIMDI='az önce'; YAS_DK='{0} dk önce'; YAS_SA='{0} sa önce'; YAS_GUN='{0} gün önce'
@@ -262,6 +263,7 @@ $METINLER = @{
         SERIT_5SA='5h'; SERIT_HAFTA='week'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
         SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'; KAYNAK_MASAUSTU='desktop'
+        SONRASI_KULLANIM='Claude finished at least one turn after this measurement — the real value is higher.'
         SIFIRLANDI='reset'; BIRAZDAN='resetting shortly'
         KALAN_DK='in {0} min'; KALAN_SADK='in {0} h {1} min'
         YAS_SIMDI='just now'; YAS_DK='{0} min ago'; YAS_SA='{0} h ago'; YAS_GUN='{0} d ago'
@@ -534,6 +536,8 @@ $script:DurumHam = $null             # statusLine'ın yazdığı ham dosya
 $script:SonYazma = [datetime]::MinValue
 $script:Masaustu = $null             # masaüstü uygulamasından son örnek + türevleri
 $script:MasaustuSonYazma = [datetime]::MinValue
+$script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
+$script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
 
 
@@ -1017,13 +1021,17 @@ $IKON_ONAY    = [char]0xE73E   # ✓
 $IKON_BEKLE   = [char]0xE823   # kum saati
 
 function Update-Olay {
-    if (-not (Test-Path $OlayDosya)) { $OlayKutu.Visibility = 'Collapsed'; return }
+    if (-not (Test-Path $OlayDosya)) { $script:SonOlayMs = 0; $OlayKutu.Visibility = 'Collapsed'; return }
 
     try {
         $o = Get-Content $OlayDosya -Raw -Encoding UTF8 | ConvertFrom-Json
     } catch {
         return   # yarım yazılmış dosya — bir sonraki turda tekrar denenir
     }
+
+    # Hook'lar masaüstü uygulamasında da ateşleniyor (ölçüldü). Bu zaman damgası
+    # "ölçümden sonra kullanım oldu mu" sorusunun cevabı; olay kutusu kapansa da tutulur.
+    if (Test-Ozellik $o 'zaman') { $script:SonOlayMs = [int64]$o.zaman }
 
     $zaman = ConvertFrom-UnixSaniye ([int64]$o.zaman / 1000)
     if ($null -eq $zaman) { $OlayKutu.Visibility = 'Collapsed'; return }
@@ -1126,6 +1134,10 @@ function Update-Gorunum {
         $olcumMs = $script:Veri.olcumZamani
     }
     $yazildi = ConvertFrom-UnixSaniye ([int64]$olcumMs / 1000)
+    # Ölçümden en az 90 sn sonra bir tur bitmişse sayı artık bir TABAN. 90 sn:
+    # terminalde Stop hook'u ile statusLine yazımı aynı ana düşer, o eş zamanlı
+    # çift yanlış pozitif vermesin.
+    $script:KullanimSonrasi = ($script:SonOlayMs -gt ([int64]$olcumMs + 90000))
     if ($null -ne $yazildi) {
         $yasSn = ([DateTime]::Now - $yazildi).TotalSeconds
         # Masaüstü kaynağı 15 dk'da bir örnekler; ona 5 dk'lık eşik uygulansa
@@ -1140,8 +1152,9 @@ function Update-Gorunum {
             $Yas.Opacity = 1.0
         } else {
             $Kok.Opacity = 1.0
-            # Sayının nereden geldiği görünsün: "canlı · masaüstü" / "canlı".
-            $Yas.Text = if ((Get-Kaynak) -eq 'masaustu') { '{0} · {1}' -f (T 'CANLI'), (T 'KAYNAK_MASAUSTU') } else { (T 'CANLI') }
+            # Masaüstü kaynağı 15 dk'da bir örnekler; ona "canlı" demek yerine
+            # gerçek yaşını yaz: "masaüstü · 7 dk önce". Terminal olay bazlı, o "canlı".
+            $Yas.Text = if ((Get-Kaynak) -eq 'masaustu') { '{0} · {1}' -f (T 'KAYNAK_MASAUSTU'), (Format-Yas $yazildi) } else { (T 'CANLI') }
             $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8EDF5')
             $Yas.Opacity = 0.45
         }
@@ -1163,6 +1176,15 @@ function Update-Gorunum {
 
     Update-Bar $script:Veri.five_hour $Yuzde5 $Sifir5 $Dolgu5 $bitisDk
     Update-Bar $script:Veri.seven_day $YuzdeH $SifirH $DolguH
+
+    # Ölçümden SONRA Claude tur bitirmişse yüzde "en az bu kadar" demektir; ok
+    # bunu söyler. Hook masaüstünde de ateşlendiği için bu işaret 15 dk'lık
+    # örnekleme boşluklarını dürüstçe doldurur — sayı uydurmadan.
+    $Yuzde5.ToolTip = $null
+    if ($script:VeriTaze -and $script:KullanimSonrasi -and $Yuzde5.Text -ne '—') {
+        $Yuzde5.Text += ' ▲'
+        $Yuzde5.ToolTip = (T 'SONRASI_KULLANIM')
+    }
 
     Update-Hiz $bitisDk
     Update-Hafta
@@ -1212,6 +1234,7 @@ function Update-Serit {
         $p.D.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($renk)
     }
 
+    if ($script:VeriTaze -and $script:KullanimSonrasi -and $Serit5Yuzde.Text -ne '—') { $Serit5Yuzde.Text += ' ▲' }
     $SeritKalan.Text = if ($null -ne $bes) { Format-Kalan (ConvertFrom-UnixSaniye $bes.resets_at) } else { '' }
     $SeritYas.Text   = if ($script:VeriTaze) { '' } else { $Yas.Text }
 }

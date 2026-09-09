@@ -60,8 +60,12 @@ percentage not lower); otherwise it is left blank rather than guessed.
 ## Features
 
 - **Works with the desktop app** — updates every 15 minutes from the app's own
-  usage history, no terminal needed. The age label says where the number came
-  from: `live · desktop`.
+  usage history, no terminal needed (every 5 minutes for half an hour after you
+  open the app's tray usage popup). The age label says where the number came
+  from and how old it is: `desktop · 7 min ago`.
+- **▲ = "at least this much"** — hooks fire in the desktop app too, so when
+  Claude finishes a turn after the last measurement the 5-hour percentage gets
+  a `▲`: the real value is higher, the widget just will not guess by how much.
 - **Two looks** — a desktop card, or a slim strip that sits on top of the
   taskbar with the two limits stacked. Right-click → *Appearance*. Each keeps
   its own position.
@@ -124,7 +128,11 @@ terminal Claude Code session you are actively using, or the Claude desktop app
    file with values that never move. Leaving an idle session open does not
    help. The widget tracks when the values were last **measured**, not when the
    file was written; stale bars turn grey and the age label turns amber.
-3. The desktop file is **undocumented** (schema version 2). The widget checks
+3. Desktop polling is 15 minutes normally, 5 minutes for 30 minutes after you
+   open the tray usage popup, and pauses while you are idle for 10+ minutes.
+   The widget shows the sample's real age rather than calling it live, and
+   marks the 5-hour bar with `▲` when a Claude turn finished after the sample.
+4. The desktop file is **undocumented** (schema version 2). The widget checks
    the version and silently ignores anything it does not recognise, falling
    back to the status line. The app also has a remotely configurable gate
    (`pollRequiresTrayOpenWithinHours`); if samples ever stop, click the tray
