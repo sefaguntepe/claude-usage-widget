@@ -4,8 +4,10 @@ A transparent desktop widget for Windows that shows how much of your
 **Claude subscription's 5-hour and weekly rate limits** you have used — plus a
 7-day history, a burn-rate warning, and optional threshold alerts.
 
-It reads the numbers from Claude Code's own status line. **No API calls, no
-tokens, no quota spent to measure quota.**
+It reads the numbers from two files Claude already writes on your machine —
+Claude Code's status line (terminal sessions) and the Claude desktop app's own
+usage history — and shows whichever was measured more recently. **No API
+calls, no tokens, no quota spent to measure quota.**
 
 *[Türkçe belgeler: README.tr.md](README.tr.md)*
 
@@ -34,10 +36,35 @@ Claude Code ──stdin JSON──▶ durum-yaz.js ──▶ %APPDATA%\ClaudeKul
 The same install also registers `Stop` and `Notification` hooks, so the widget
 can tell you when Claude finished a long job or is waiting for permission.
 
+### Second source: the desktop app
+
+The desktop app never runs status line scripts, but while it is open it polls
+`claude.ai/api/organizations/<org>/usage` **with its own session** every 15
+minutes (for its tray/plan-usage feature) and appends the result to
+`%APPDATA%\Claude\plan-usage-history.json`:
+
+```json
+{ "t": 1788923411336, "org": "…", "u": { "fh": 30, "sd": 94 } }
+```
+
+`fh` is the 5-hour percentage, `sd` the weekly one. The widget only **reads**
+this file — no credentials, no network, no writes. The two sources are
+snapshots of the same API; **the more recently measured one wins.** Cross-check
+against the status line on the same minute: identical or 1 point apart; every
+larger gap was the status line lagging behind.
+
+The file has no `resets_at`, so when the desktop sample wins the countdown is
+kept only if the status line's window is still open (reset in the future and
+percentage not lower); otherwise it is left blank rather than guessed.
+
 ## Features
 
+- **Works with the desktop app** — updates every 15 minutes from the app's own
+  usage history, no terminal needed. The age label says where the number came
+  from: `live · desktop`.
 - **Two looks** — a desktop card, or a slim strip that sits on top of the
-  taskbar. Right-click → *Appearance*. Each keeps its own position.
+  taskbar with the two limits stacked. Right-click → *Appearance*. Each keeps
+  its own position.
 
   ![Strip theme](docs/strip.png)
 
@@ -85,24 +112,29 @@ Check the current state any time with `node statusline.js durum`.
 
 ## Important limitation — read this first
 
-**The numbers only advance while you are working in a terminal Claude Code
-session.** Two separate facts cause this:
+**The numbers advance only while one of the two sources is running:** a
+terminal Claude Code session you are actively using, or the Claude desktop app
+(15-minute cadence). Facts worth knowing:
 
-1. The desktop app does not run status line scripts at all.
+1. The desktop app does not run status line scripts at all — that is why the
+   second source exists.
 2. `rate_limits` is **not a live query** — it is a snapshot from that session's
    last API response. Claude Code caches it and re-sends the same values every
    time the status line runs, so an *idle* terminal session keeps rewriting the
-   file with values that never move.
+   file with values that never move. Leaving an idle session open does not
+   help. The widget tracks when the values were last **measured**, not when the
+   file was written; stale bars turn grey and the age label turns amber.
+3. The desktop file is **undocumented** (schema version 2). The widget checks
+   the version and silently ignores anything it does not recognise, falling
+   back to the status line. The app also has a remotely configurable gate
+   (`pollRequiresTrayOpenWithinHours`); if samples ever stop, click the tray
+   icon once.
 
-Because of (2), leaving an idle session open does not help. The widget tracks
-when the values were last **measured** rather than when the file was last
-written, so an idle session shows "12 min ago", not "live". Stale bars turn
-grey and the age label turns amber.
-
-There is no workaround: no local file holds this data, and the hook payload
-does not include rate limits. The only alternative would be calling the API
-with your OAuth token — which spends quota to measure quota and is a grey area
-under the terms of service. Deliberately not done.
+Deliberately **not** done: calling the usage API with your OAuth token (as
+some monitors do). The token's scopes include `user:inference` — it is a full
+account credential, not a read-only one — and Windows Credential Manager is
+readable by any process in your session. Reading a file the app already writes
+gets the same numbers with none of that.
 
 Two further limits:
 

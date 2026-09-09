@@ -3,7 +3,9 @@
 # Claude Kullanım — masaüstü limit widget'ı
 
 Claude aboneliğinin 5 saatlik ve haftalık limit doluluğunu masaüstünde, şeffaf
-bir pencerede gösterir. Ağa çıkmaz, token okumaz, kota harcamaz.
+bir pencerede gösterir. İki yerel kaynağı okur — Claude Code'un durum satırı
+(terminal) ve Claude masaüstü uygulamasının kendi kullanım geçmişi — hangisi
+daha yeni ölçülmüşse onu gösterir. Ağa çıkmaz, token okumaz, kota harcamaz.
 
 ```
 CLAUDE KULLANIM                        canlı
@@ -31,6 +33,27 @@ Claude Code ──stdin JSON──▶ durum-yaz.js ──▶ %APPDATA%\ClaudeKul
                                  ▼                          ▼
                         terminaldeki durum satırı      kullanim.ps1 (widget)
 ```
+
+### İkinci kaynak: masaüstü uygulaması
+
+Masaüstü uygulaması statusLine betiklerini hiç çalıştırmaz; ama açıkken
+**kendi oturumuyla** 15 dakikada bir `claude.ai/api/organizations/<org>/usage`
+uç noktasını sorgular (tepsi/plan kullanımı özelliği için) ve sonucu
+`%APPDATA%\Claude\plan-usage-history.json` dosyasına ekler:
+
+```json
+{ "t": 1788923411336, "org": "…", "u": { "fh": 30, "sd": 94 } }
+```
+
+`fh` = 5 saatlik %, `sd` = haftalık %. Widget bu dosyayı yalnızca **okur**:
+kimlik bilgisi yok, ağ isteği yok, yazma yok. İki kaynak da aynı API'nin
+fotoğrafı; **ölçüm zamanı daha yeni olan kazanır.** Doğrulama: statusLine ile
+aynı dakikaya düşen 16 örnekte birebir ya da 1 puan fark; büyük farkların hepsi
+statusLine'ın geride kaldığı anlar.
+
+Dosyada `resets_at` yok. Masaüstü kazandığında geri sayım, yalnızca
+statusLine'ın gördüğü pencere hâlâ açıksa (sıfırlanma ileride VE yüzde geri
+gitmemiş) korunur; pencere dönmüşse uydurulmaz, boş bırakılır.
 
 Alternatifler neden elenmiş, "Denenen yollar" başlığında.
 
@@ -169,24 +192,26 @@ görürse dokunmadan durur ve başkasına ait hook girişlerini korur (yalnızca
 1. **Yalnızca 2 pencere gösterilebilir.** Claude Code `five_hour` ve
    `seven_day` veriyor; `/usage` ekranındaki model-bazlı üçüncü satır
    ("Weekly · Fable" gibi) hiçbir yerel kaynakta yok.
-2. **Yüzdeler yalnızca terminal (CMD) oturumunda ÇALIŞIRKEN ilerler.**
-   İki ayrı sebep var:
+2. **Yüzdeler iki kaynaktan biri çalışırken ilerler:** aktif kullandığınız
+   bir terminal Claude Code oturumu ya da açık duran masaüstü uygulaması
+   (15 dk çözünürlük). Bilinmesi gerekenler:
 
-   1. Masaüstü uygulaması statusLine betiklerini hiç çalıştırmıyor.
+   1. Masaüstü uygulaması statusLine betiklerini hiç çalıştırmıyor — ikinci
+      kaynak bu yüzden var.
    2. `rate_limits` **canlı bir sorgu değil** — o oturumun son API yanıtından
       kalma bir fotoğraf. Claude Code onu önbellekte tutar ve statusline her
       çalıştığında aynı değerleri yeniden gönderir; yani **boşta duran** bir
-      oturum dosyayı tazeler ama sayılar kıpırdamaz.
-
-   (2) yüzünden boşta bir oturum açık bırakmak işe yaramaz. Widget, dosyanın
-   yazıldığı anı değil değerlerin **ölçüldüğü** anı takip eder: boşta oturumda
-   "canlı" değil "12 dk önce" yazar. Bayat barlar griye döner, yaş etiketi
-   amber olur.
-   *(Masaüstü oturumları için alternatif yerel kaynak yok — limit verisi
-   hiçbir dosyaya yazılmıyor.)*
-3. **Veri sadece Claude Code açıkken tazelenir.** Oturum kapalıyken widget son
-   bilinen değeri soluk gösterir ve yaşını yazar ("20 dk önce"). Sıfırlanma
-   geri sayımı yerel hesaplanır, bayat veride bile doğrudur.
+      oturum dosyayı tazeler ama sayılar kıpırdamaz. Boşta oturum açık
+      bırakmak işe yaramaz. Widget değerlerin **ölçüldüğü** anı takip eder;
+      bayat barlar griye döner, yaş etiketi amber olur.
+   3. Masaüstü dosyası **belgelenmemiş** (şema sürüm 2). Widget sürümü kontrol
+      eder, tanımadığı dosyayı sessizce yok sayıp statusLine'a düşer.
+      Uygulamada uzaktan ayarlanabilen bir kapı da var
+      (`pollRequiresTrayOpenWithinHours`); örnekler bir gün durursa tepsi
+      simgesine bir kez tıklayın.
+3. **İki kaynak da kapalıyken** widget son bilinen değeri gri gösterir ve
+   yaşını yazar ("20 dk önce"). Sıfırlanma geri sayımı yerel hesaplanır, bayat
+   veride bile doğrudur.
 4. **`rate_limits` oturumun ilk API yanıtından sonra gelir.** Yeni oturumun ilk
    saniyelerinde eski değer görünür — bu normaldir. `durum-yaz.js`, veri
    yokken dosyaya dokunmaz; iyi veriyi boş veriyle ezmez.
@@ -199,10 +224,14 @@ görürse dokunmadan durur ve başkasına ait hook girişlerini korur (yalnızca
 | Yol | Sonuç |
 |---|---|
 | `claude usage` benzeri bir CLI komutu | Yok — alt komut listesinde böyle bir şey bulunmuyor |
-| Diskte önbelleklenmiş limit durumu | Yok. `stats-cache.json` yalnızca geçmiş aktivite, `policy-limits.json` alakasız |
-| Transkriptlerden token toplayıp tahmin | Planın gerçek tavanı bilinmediği için `/usage` ile tutmaz |
-| OAuth token ile API'ye istek | Kesin ama kotayı ölçmek için kota harcar, token yenilemesi ister, otomatik erişim ToS açısından gri alan |
-| **statusLine JSON'u** | ✅ Resmî, yerel, bedava, tam olarak aranan alanlar |
+| Claude Code'un diskte önbelleklediği limit durumu | Yok. `stats-cache.json` yalnızca geçmiş aktivite, `policy-limits.json` alakasız |
+| Transkriptlerden token toplayıp tahmin | Gerçek veriyle ölçüldü: en iyi ölçüt (çıktı token'ı) bile %63 sapıyor; aynı +14 puan bir kez 8 bin, bir kez 180 bin token |
+| OpenTelemetry metrikleri (`claude_code.*`) | Masaüstü dâhil her yüzeyde çalışıyor ama 8 metriğin hiçbiri limit yüzdesi değil; maliyet metriği vekil olarak %71 sapıyor |
+| Hook'lar (`Stop`, `Notification`) | Yükte limit alanı yok |
+| `claude -p` ile tetikleme | statusLine yalnızca etkileşimli TUI'de çalışıyor; print modunda dosya değişmiyor |
+| OAuth token ile API'ye istek (`/api/oauth/usage`) | Kesin sayı verir ama token'ın kapsamı `user:inference` dâhil tam hesap; accessToken 24 dk'da doluyor → refresh token tutmak gerekir; Kimlik Yöneticisi aynı oturumdaki her sürece açık. **Reddedildi.** |
+| **statusLine JSON'u** | ✅ Resmî, yerel, bedava — terminal oturumlarında |
+| **Masaüstü uygulamasının `plan-usage-history.json` dosyası** | ✅ Yerel, kimlik bilgisi yok, 15 dk çözünürlük — masaüstü oturumlarında |
 
 ## Tuzaklar (aynı hataya düşmemek için)
 
@@ -266,7 +295,7 @@ Sağ tık → **Görünüm** ile iki yerleşim arasında geçiş yapılır:
 | | |
 |---|---|
 | **Kart** | Masaüstünde duran pano. Masaüstü seviyesinde kalır, hiçbir pencerenin önüne geçmez. |
-| **Şerit (alt bar)** | Görev çubuğunun üzerine oturan ince tek satır. Her zaman görünür. |
+| **Şerit (alt bar)** | Görev çubuğunun üzerine oturan iki satırlık ince katman; 5 saat ve hafta alt alta. Her zaman görünür. |
 
 ![Şerit teması](docs/strip.png)
 

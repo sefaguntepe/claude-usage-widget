@@ -121,6 +121,14 @@ $DurumDosya  = Join-Path $VeriKlasor 'durum.json'      # statusLine yazar
 $OlayDosya   = Join-Path $VeriKlasor 'olay.json'       # hook'lar yazar
 $AyarDosya   = Join-Path $VeriKlasor 'pencere.json'    # widget yazar
 
+# İkinci kaynak: Claude MASAÜSTÜ uygulamasının kendi kullanım geçmişi. Uygulama
+# açıkken 15 dakikada bir claude.ai'den yüzdeleri çekip buraya ekliyor
+# (tepsi/plan kullanımı özelliği için). Biz yalnızca OKURUZ: kimlik bilgisi
+# yok, ağ isteği yok, dosyaya yazma yok. Terminal oturumu olmadan da güncel
+# kalmanın tek güvenli yolu bu. Biçim belgelenmemiş (sürüm 2, alanlar
+# t/org/u.fh/u.sd) — uymayan dosya sessizce yok sayılır, statusLine'a düşülür.
+$MasaustuDosya = Join-Path $env:APPDATA 'Claude\plan-usage-history.json'
+
 $OLAY_OMUR_SN  = 900    # olay satırı 15 dk sonra kaybolur
 $YANIP_SONME_SN = 12    # ilk 12 saniye dikkat çeksin diye yanıp söner
 $COK_BAYAT_SN  = 43200  # 12 saatten eskiyse sebebini de yaz
@@ -129,6 +137,8 @@ $COK_BAYAT_SN  = 43200  # 12 saatten eskiyse sebebini de yaz
 # olmalı. 232 + 2×18 kapsül dolgusu = 268 → masaüstü saat widget'ı ile aynı en.
 $IZ_GENISLIK = 232.0
 $BAYAT_SN    = 300      # 5 dk'dan eski veri "bayat" sayılır
+$MASAUSTU_BAYAT_SN = 1500   # masaüstü 15 dk'da bir örnekler; 25 dk'ya kadar taze
+$MASAUSTU_HIZ_DK   = 60     # tüketim hızı için geriye bakış (15 dk'lık örneklerle 45 dk çok dar)
 
 $ArkaPlanlar = @{ yok = '#00000000'; hafif = '#59000000'; koyu = '#A6000000' }
 
@@ -230,14 +240,14 @@ $METINLER = @{
         MENU_TEMA='Görünüm'; TEMA_KART='Kart'; TEMA_SERIT='Şerit (alt bar)'
         SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
-        SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'
+        SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'; KAYNAK_MASAUSTU='masaüstü'
         SIFIRLANDI='sıfırlandı'; BIRAZDAN='birazdan sıfırlanır'
         KALAN_DK='{0} dk sonra'; KALAN_SADK='{0} sa {1} dk sonra'
         YAS_SIMDI='az önce'; YAS_DK='{0} dk önce'; YAS_SA='{0} sa önce'; YAS_GUN='{0} gün önce'
         SURE_DK='{0} dk'; SURE_SADK='{0} sa {1} dk'
         HIZ_UYARI='Bu hızla ~{0} içinde biter'
-        VERI_YOK='Henüz veri yok. Claude Code açıldıktan ve ilk yanıt geldikten sonra dolar.'
-        VERI_BAYAT='Veri tazelenmiyor: yüzdeler yalnızca terminal (CMD) Claude Code oturumunda güncellenir, masaüstü uygulaması beslemez.'
+        VERI_YOK='Henüz veri yok. Claude masaüstü uygulaması ya da terminalde Claude Code açılınca dolar.'
+        VERI_BAYAT='Veri tazelenmiyor: ne Claude masaüstü uygulaması ne de terminal Claude Code oturumu açık görünüyor.'
         OLAY_BITTI='Claude bitirdi'; OLAY_IZIN='İzin bekliyor'; OLAY_GIRDI='Girdi bekliyor'
         OLAY_AJAN_GIRDI='Ajan girdi bekliyor'; OLAY_AJAN_BITTI='Ajan tamamlandı'; OLAY_BEKLIYOR='Claude sizi bekliyor'
         UYARI_BASLIK='Kullanım uyarısı'; UYARI_METIN='{0} %{1:0} seviyesine ulaştı (eşik %{2}).'
@@ -251,14 +261,14 @@ $METINLER = @{
         MENU_TEMA='Appearance'; TEMA_KART='Card'; TEMA_SERIT='Strip (taskbar)'
         SERIT_5SA='5h'; SERIT_HAFTA='week'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
-        SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'
+        SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'; KAYNAK_MASAUSTU='desktop'
         SIFIRLANDI='reset'; BIRAZDAN='resetting shortly'
         KALAN_DK='in {0} min'; KALAN_SADK='in {0} h {1} min'
         YAS_SIMDI='just now'; YAS_DK='{0} min ago'; YAS_SA='{0} h ago'; YAS_GUN='{0} d ago'
         SURE_DK='{0} min'; SURE_SADK='{0} h {1} min'
         HIZ_UYARI='At this rate it runs out in ~{0}'
-        VERI_YOK='No data yet. It fills after Claude Code opens and the first response arrives.'
-        VERI_BAYAT='Not refreshing: percentages only update in a terminal Claude Code session — the desktop app does not feed them.'
+        VERI_YOK='No data yet. It fills once the Claude desktop app or a terminal Claude Code session is running.'
+        VERI_BAYAT='Not refreshing: neither the Claude desktop app nor a terminal Claude Code session seems to be running.'
         OLAY_BITTI='Claude finished'; OLAY_IZIN='Waiting for permission'; OLAY_GIRDI='Waiting for input'
         OLAY_AJAN_GIRDI='Agent needs input'; OLAY_AJAN_BITTI='Agent completed'; OLAY_BEKLIYOR='Claude is waiting for you'
         UYARI_BASLIK='Usage alert'; UYARI_METIN='{0} reached {1:0}% (threshold {2}%).'
@@ -303,42 +313,51 @@ $xamlMetin = @'
   </Window.ContextMenu>
 
   <Grid>
-  <!-- ŞERİT (alt bar) teması: görev çubuğunun üstünde ince, yatay bir çubuk -->
-  <Border x:Name="SeritKapsul" Visibility="Collapsed" CornerRadius="7" Padding="11,5,12,6"
+  <!-- ŞERİT (alt bar) teması: görev çubuğunun üstünde iki satırlık ince katman.
+       5 saatlik ve haftalık ALT ALTA: yan yana dizilim 48 px'lik çubukta hem
+       uzun hem de tek bakışta okunmuyordu. -->
+  <Border x:Name="SeritKapsul" Visibility="Collapsed" CornerRadius="7" Padding="10,3,12,4"
           Background="#D91C1F26" BorderBrush="#26FFFFFF" BorderThickness="1">
-    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-      <TextBlock Text="CLAUDE" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
-                 Foreground="#E8EDF5" Opacity="0.5" VerticalAlignment="Center" Margin="0,1,10,0"/>
+    <Grid VerticalAlignment="Center">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
 
-      <TextBlock Text="@@SERIT_5SA@@" FontFamily="Segoe UI" FontSize="10" Foreground="#E8EDF5"
-                 Opacity="0.55" VerticalAlignment="Center" Margin="0,1,5,0"/>
-      <Border Width="54" Height="5" CornerRadius="2.5" Background="#26FFFFFF" VerticalAlignment="Center">
-        <Border x:Name="Serit5Dolgu" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      <TextBlock Grid.RowSpan="2" Text="CLAUDE" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
+                 Foreground="#E8EDF5" Opacity="0.5" VerticalAlignment="Center" Margin="0,0,10,0"/>
+
+      <!-- 1. satır: 5 saat -->
+      <TextBlock Grid.Row="0" Grid.Column="1" Text="@@SERIT_5SA@@" FontFamily="Segoe UI" FontSize="9.5"
+                 Foreground="#E8EDF5" Opacity="0.55" VerticalAlignment="Center" TextAlignment="Right" Margin="0,0,6,0"/>
+      <Border Grid.Row="0" Grid.Column="2" Width="70" Height="4" CornerRadius="2" Background="#26FFFFFF" VerticalAlignment="Center">
+        <Border x:Name="Serit5Dolgu" Width="0" CornerRadius="2" HorizontalAlignment="Left" Background="#4C8DF6"/>
       </Border>
-      <TextBlock x:Name="Serit5Yuzde" FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
-                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="34" TextAlignment="Right"
-                 Margin="6,0,0,0" Typography.NumeralAlignment="Tabular"/>
+      <TextBlock Grid.Row="0" Grid.Column="3" x:Name="Serit5Yuzde" FontFamily="Segoe UI" FontSize="10.5" FontWeight="SemiBold"
+                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="32" TextAlignment="Right" Margin="6,0,0,0"
+                 Typography.NumeralAlignment="Tabular"/>
+      <TextBlock Grid.Row="0" Grid.Column="4" x:Name="SeritKalan" FontFamily="Segoe UI" FontSize="9.5"
+                 Foreground="#E8EDF5" Opacity="0.55" VerticalAlignment="Center" Margin="10,0,0,0"/>
 
-      <TextBlock Text="·" FontFamily="Segoe UI" FontSize="11" Foreground="#E8EDF5" Opacity="0.3"
-                 VerticalAlignment="Center" Margin="10,0,10,0"/>
-
-      <TextBlock Text="@@SERIT_HAFTA@@" FontFamily="Segoe UI" FontSize="10" Foreground="#E8EDF5"
-                 Opacity="0.55" VerticalAlignment="Center" Margin="0,1,5,0"/>
-      <Border Width="54" Height="5" CornerRadius="2.5" Background="#26FFFFFF" VerticalAlignment="Center">
-        <Border x:Name="SeritHDolgu" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      <!-- 2. satır: hafta -->
+      <TextBlock Grid.Row="1" Grid.Column="1" Text="@@SERIT_HAFTA@@" FontFamily="Segoe UI" FontSize="9.5"
+                 Foreground="#E8EDF5" Opacity="0.55" VerticalAlignment="Center" TextAlignment="Right" Margin="0,1,6,0"/>
+      <Border Grid.Row="1" Grid.Column="2" Width="70" Height="4" CornerRadius="2" Background="#26FFFFFF" VerticalAlignment="Center" Margin="0,1,0,0">
+        <Border x:Name="SeritHDolgu" Width="0" CornerRadius="2" HorizontalAlignment="Left" Background="#4C8DF6"/>
       </Border>
-      <TextBlock x:Name="SeritHYuzde" FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
-                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="34" TextAlignment="Right"
-                 Margin="6,0,0,0" Typography.NumeralAlignment="Tabular"/>
-
-      <TextBlock Text="·" FontFamily="Segoe UI" FontSize="11" Foreground="#E8EDF5" Opacity="0.3"
-                 VerticalAlignment="Center" Margin="10,0,10,0"/>
-
-      <TextBlock x:Name="SeritKalan" FontFamily="Segoe UI" FontSize="10" Foreground="#E8EDF5"
-                 Opacity="0.55" VerticalAlignment="Center" Margin="0,1,0,0"/>
-      <TextBlock x:Name="SeritYas" FontFamily="Segoe UI" FontSize="9.5" Foreground="#E8A33D"
+      <TextBlock Grid.Row="1" Grid.Column="3" x:Name="SeritHYuzde" FontFamily="Segoe UI" FontSize="10.5" FontWeight="SemiBold"
+                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="32" TextAlignment="Right" Margin="6,1,0,0"
+                 Typography.NumeralAlignment="Tabular"/>
+      <TextBlock Grid.Row="1" Grid.Column="4" x:Name="SeritYas" FontFamily="Segoe UI" FontSize="9" Foreground="#E8A33D"
                  VerticalAlignment="Center" Margin="10,1,0,0"/>
-    </StackPanel>
+    </Grid>
   </Border>
 
   <Border x:Name="Kapsul" CornerRadius="16" Padding="18,13,18,15" Background="#59000000">
@@ -503,15 +522,18 @@ $SeritKapsul = Get-Ogesi 'SeritKapsul'
 $Serit5Dolgu = Get-Ogesi 'Serit5Dolgu'; $Serit5Yuzde = Get-Ogesi 'Serit5Yuzde'
 $SeritHDolgu = Get-Ogesi 'SeritHDolgu'; $SeritHYuzde = Get-Ogesi 'SeritHYuzde'
 $SeritKalan  = Get-Ogesi 'SeritKalan';  $SeritYas    = Get-Ogesi 'SeritYas'
-$SERIT_IZ = 54.0    # şeritteki mini bar rayının genişliği (XAML ile aynı)
+$SERIT_IZ = 70.0    # şeritteki mini bar rayının genişliği (XAML ile aynı)
 $SERIT_TEPSI_PAYI = 250.0   # sağdaki saat/bildirim alanını örtmemek için pay
 $HaftaBolum = Get-Ogesi 'HaftaBolum'; $BugunOzet = Get-Ogesi 'BugunOzet'
 $CUBUKLAR  = @(0..6 | ForEach-Object { Get-Ogesi ('Cub{0}' -f $_) })
 $ETIKETLER = @(0..6 | ForEach-Object { Get-Ogesi ('Etk{0}' -f $_) })
 
 $script:Ayar = Get-Ayarlar
-$script:Veri = $null
+$script:Veri = $null                 # birleştirilmiş görünüm (ekrana bu gider)
+$script:DurumHam = $null             # statusLine'ın yazdığı ham dosya
 $script:SonYazma = [datetime]::MinValue
+$script:Masaustu = $null             # masaüstü uygulamasından son örnek + türevleri
+$script:MasaustuSonYazma = [datetime]::MinValue
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
 
 
@@ -620,16 +642,141 @@ function Set-SeritVarsayilanKonumu {
 # ─────────────────────────────────────────────────────────────────────────────
 # Veri okuma
 # ─────────────────────────────────────────────────────────────────────────────
-function Read-Durum {
-    if (-not (Test-Path $DurumDosya)) { $script:Veri = $null; return }
+function Read-DurumDosyasi {
+    if (-not (Test-Path $DurumDosya)) { $script:DurumHam = $null; return }
     try {
         $bilgi = Get-Item $DurumDosya
         if ($bilgi.LastWriteTime -le $script:SonYazma) { return }   # değişmediyse okuma
-        $script:Veri = Get-Content $DurumDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+        $script:DurumHam = Get-Content $DurumDosya -Raw -Encoding UTF8 | ConvertFrom-Json
         $script:SonYazma = $bilgi.LastWriteTime
     } catch {
         # Yarım yazılmış dosyaya denk geldiysek bir sonraki turda tekrar denenir.
     }
+}
+
+function Test-Ozellik {
+    param($Nesne, [string]$Ad)
+    return ($null -ne $Nesne -and $Nesne.PSObject.Properties.Name -contains $Ad -and $null -ne $Nesne.$Ad)
+}
+
+# Bir örnek serisinde (fh ya da sd) mevcut pencerenin başladığı anı bulur: en
+# son DÜŞÜŞTEN sonraki ilk örneğin zamanı. Masaüstü dosyasında resets_at yok;
+# eşik uyarısının "bu pencere için zaten uyardım" hafızası bu anahtarla çalışır.
+function Get-PencereBaslangici {
+    param($Ornekler, [string]$Alan)
+    $onceki = $null; $baslangic = $null
+    foreach ($o in $Ornekler) {
+        if (-not (Test-Ozellik $o.u $Alan)) { continue }
+        $deger = [double]$o.u.$Alan
+        if ($null -eq $baslangic -or ($null -ne $onceki -and $deger -lt $onceki)) { $baslangic = [int64]$o.t }
+        $onceki = $deger
+    }
+    return $baslangic
+}
+
+# durum-yaz.js'teki hizHesapla'nın aynısı, masaüstü örnekleriyle: son
+# MASAUSTU_HIZ_DK dakikadaki artıştan yüzde/dk, oradan "kaç dakikada biter".
+# Arada düşüş (sıfırlanma) varsa hesaplanmaz — yanıltıcı olur.
+function Get-MasaustuHiz {
+    param($Ornekler, [int64]$SimdiMs, [double]$Fh)
+    $pencere = @($Ornekler | Where-Object {
+        (Test-Ozellik $_.u 'fh') -and ($SimdiMs - [int64]$_.t) -le ($MASAUSTU_HIZ_DK * 60000) })
+    if ($pencere.Count -lt 2) { return $null }
+    for ($i = 1; $i -lt $pencere.Count; $i++) {
+        if ([double]$pencere[$i].u.fh -lt [double]$pencere[$i - 1].u.fh) { return $null }
+    }
+    $ilk = $pencere[0]
+    $dakika = ($SimdiMs - [int64]$ilk.t) / 60000.0
+    if ($dakika -lt 1) { return $null }
+    $yuzdeDk = ($Fh - [double]$ilk.u.fh) / $dakika
+    if ($yuzdeDk -le 0.01) { return $null }
+    return [pscustomobject]@{ yuzdeDk = $yuzdeDk; bitisDk = [int][Math]::Round((100 - $Fh) / $yuzdeDk) }
+}
+
+function Read-Masaustu {
+    if (-not (Test-Path $MasaustuDosya)) { $script:Masaustu = $null; return }
+    try {
+        $bilgi = Get-Item $MasaustuDosya
+        if ($bilgi.LastWriteTime -le $script:MasaustuSonYazma) { return }
+        $j = Get-Content $MasaustuDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+        $script:MasaustuSonYazma = $bilgi.LastWriteTime
+
+        # Şema kapısı: bildiğimiz biçim değilse hiç yorumlamaya kalkma.
+        if (-not (Test-Ozellik $j 'version') -or [int]$j.version -ne 2 -or -not (Test-Ozellik $j 'samples')) {
+            Write-Tani 'masaustu: sema uyumsuz, yok sayildi'
+            $script:Masaustu = $null; return
+        }
+        $ornekler = @($j.samples | Where-Object { (Test-Ozellik $_ 't') -and (Test-Ozellik $_ 'u') } |
+                     Sort-Object { [int64]$_.t })
+        if ($ornekler.Count -eq 0) { $script:Masaustu = $null; return }
+        $son = $ornekler[-1]
+
+        $fh = if (Test-Ozellik $son.u 'fh') { [double]$son.u.fh } else { $null }
+        $sd = if (Test-Ozellik $son.u 'sd') { [double]$son.u.sd } else { $null }
+        $script:Masaustu = [pscustomobject]@{
+            t   = [int64]$son.t
+            fh  = $fh
+            sd  = $sd
+            hiz = $(if ($null -ne $fh) { Get-MasaustuHiz -Ornekler $ornekler -SimdiMs ([int64]$son.t) -Fh $fh } else { $null })
+            pencere5 = Get-PencereBaslangici -Ornekler $ornekler -Alan 'fh'
+            pencereH = Get-PencereBaslangici -Ornekler $ornekler -Alan 'sd'
+        }
+        Write-Tani ("masaustu: t={0} fh={1} sd={2} ornek={3}" -f $son.t, $fh, $sd, $ornekler.Count)
+    } catch {
+        Write-Tani ("masaustu: okuma hatasi " + $_.Exception.Message)
+    }
+}
+
+# İki kaynak da aynı API'nin bir fotoğrafı; ÖLÇÜM ZAMANI daha yeni olan kazanır.
+# Masaüstü kazanırsa yüzdeler oradan gelir; sıfırlanma saati yalnızca
+# statusLine'ın gördüğü pencere hâlâ açıksa korunur — pencere dönmüşse
+# uydurulmaz, boş bırakılır (geri sayım gösterilmez).
+function Merge-Kaynaklar {
+    $d = $script:DurumHam
+    $m = $script:Masaustu
+    if ($null -eq $m) { return $d }
+
+    $dOlcum = $null
+    if ($null -ne $d) {
+        $dOlcum = if (Test-Ozellik $d 'olcumZamani') { [int64]$d.olcumZamani }
+                  elseif (Test-Ozellik $d 'yazildi')  { [int64]$d.yazildi } else { 0 }
+        if ($dOlcum -ge $m.t) { return $d }          # statusLine daha taze
+    }
+
+    $bes = [pscustomobject]@{ used_percentage = $m.fh; resets_at = $null; pencere_anahtari = $m.pencere5 }
+    $haf = [pscustomobject]@{ used_percentage = $m.sd; resets_at = $null; pencere_anahtari = $m.pencereH }
+    if ($null -ne $d) {
+        foreach ($cift in @(@($bes, 'five_hour', $m.fh), @($haf, 'seven_day', $m.sd))) {
+            $hedef, $alan, $yeni = $cift
+            if (-not (Test-Ozellik $d $alan) -or -not (Test-Ozellik $d.$alan 'resets_at')) { continue }
+            $sifirMs = [int64]$d.$alan.resets_at * 1000
+            $eskiYuzde = if (Test-Ozellik $d.$alan 'used_percentage') { [double]$d.$alan.used_percentage } else { -1 }
+            # Aynı pencere: sıfırlanma hâlâ ileride VE yüzde geri gitmemiş.
+            if ($sifirMs -gt $m.t -and $null -ne $yeni -and $yeni -ge $eskiYuzde) { $hedef.resets_at = $d.$alan.resets_at }
+        }
+    }
+
+    $v = [ordered]@{ yazildi = $m.t; olcumZamani = $m.t; five_hour = $null; seven_day = $null
+                     hiz = $null; haftalik = @(); oturum = $null }
+    if ($null -ne $d) { foreach ($oz in $d.PSObject.Properties) { $v[$oz.Name] = $oz.Value } }
+    $v.five_hour = $bes
+    $v.seven_day = $haf
+    $v.olcumZamani = $m.t
+    if ($null -eq $v.yazildi -or [int64]$v.yazildi -lt $m.t) { $v.yazildi = $m.t }
+    $v.hiz = $m.hiz
+    $v.kaynak = 'masaustu'
+    return [pscustomobject]$v
+}
+
+function Read-Durum {
+    Read-DurumDosyasi
+    Read-Masaustu
+    $script:Veri = Merge-Kaynaklar
+}
+
+function Get-Kaynak {
+    if (Test-Ozellik $script:Veri 'kaynak') { return [string]$script:Veri.kaynak }
+    return 'terminal'
 }
 
 function ConvertFrom-UnixSaniye {
@@ -778,7 +925,13 @@ function Test-Esik {
 
     # Buradan sonrası yalnızca eşik aşıldığında çalışır — tanı günlüğü ancak
     # bu noktada yazıyor, yoksa saniyede iki satırla dosyayı boğardı.
-    $anahtar = [int64]$Pencere.resets_at
+    # Pencere kimliği: sıfırlanma saati. Masaüstü kaynağında o yok; orada
+    # pencerenin başladığı örnek zamanı kullanılır. İkisi de yoksa uyarılmaz —
+    # anahtarsız uyarı ya hiç susmaz ya hiç tekrarlamaz.
+    $anahtar = $null
+    if ($null -ne $Pencere.resets_at) { $anahtar = [int64]$Pencere.resets_at }
+    elseif (Test-Ozellik $Pencere 'pencere_anahtari') { $anahtar = [int64]$Pencere.pencere_anahtari }
+    if ($null -eq $anahtar) { return }
     if ($null -ne $script:Ayar.$AtesliAlan -and [int64]$script:Ayar.$AtesliAlan -eq $anahtar) {
         return                                # bu pencere için zaten uyarıldı
     }
@@ -975,16 +1128,20 @@ function Update-Gorunum {
     $yazildi = ConvertFrom-UnixSaniye ([int64]$olcumMs / 1000)
     if ($null -ne $yazildi) {
         $yasSn = ([DateTime]::Now - $yazildi).TotalSeconds
-        $script:VeriTaze = ($yasSn -le $BAYAT_SN)
+        # Masaüstü kaynağı 15 dk'da bir örnekler; ona 5 dk'lık eşik uygulansa
+        # sürekli "bayat" görünür. Eşik kaynağa göre.
+        $bayatEsigi = if ((Get-Kaynak) -eq 'masaustu') { $MASAUSTU_BAYAT_SN } else { $BAYAT_SN }
+        $script:VeriTaze = ($yasSn -le $bayatEsigi)
         # Bayat veri: soluklaştır ve yaşını yaz — güncel sanıp bakmayalım.
-        if ($yasSn -gt $BAYAT_SN) {
+        if ($yasSn -gt $bayatEsigi) {
             $Kok.Opacity = 0.45
             $Yas.Text = Format-Yas $yazildi
             $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8A33D')
             $Yas.Opacity = 1.0
         } else {
             $Kok.Opacity = 1.0
-            $Yas.Text = (T 'CANLI')
+            # Sayının nereden geldiği görünsün: "canlı · masaüstü" / "canlı".
+            $Yas.Text = if ((Get-Kaynak) -eq 'masaustu') { '{0} · {1}' -f (T 'CANLI'), (T 'KAYNAK_MASAUSTU') } else { (T 'CANLI') }
             $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8EDF5')
             $Yas.Opacity = 0.45
         }
