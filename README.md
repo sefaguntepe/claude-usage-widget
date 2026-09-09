@@ -36,6 +36,11 @@ can tell you when Claude finished a long job or is waiting for permission.
 
 ## Features
 
+- **Two looks** — a desktop card, or a slim strip that sits on top of the
+  taskbar. Right-click → *Appearance*. Each keeps its own position.
+
+  ![Strip theme](docs/strip.png)
+
 - **5-hour and weekly usage bars** with reset countdowns
 - **Burn-rate projection** — bars turn red when the window will run out *before*
   it resets, even at moderate usage. A window at 60% that lost 30 points in the

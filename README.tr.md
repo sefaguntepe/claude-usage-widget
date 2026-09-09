@@ -259,6 +259,33 @@ süreden **kısaysa** kırmızıya döner. Böylece renk "ne kadar harcadım"ı 
 Daha basit bir ara adım: eşikleri sabit tutup sıfırlanmaya 30 dakikadan az
 kalmışsa kırmızıyı hiç göstermemek — nasılsa birazdan sıfırlanacak.
 
+## Görünüm temaları
+
+Sağ tık → **Görünüm** ile iki yerleşim arasında geçiş yapılır:
+
+| | |
+|---|---|
+| **Kart** | Masaüstünde duran pano. Masaüstü seviyesinde kalır, hiçbir pencerenin önüne geçmez. |
+| **Şerit (alt bar)** | Görev çubuğunun üzerine oturan ince tek satır. Her zaman görünür. |
+
+![Şerit teması](docs/strip.png)
+
+Windows 11'de görev çubuğuna **içerik eklemenin desteklenen bir yolu yok** —
+deskband API'si kaldırıldı. Explorer'a müdahale eden üçüncü parti yöntemler hem
+sürüm güncellemelerinde kırılıyor hem de kurumsal güvenlik yazılımlarının
+engellediği türden. Bu yüzden şerit, çubuğun **üzerine binen** ayrı bir pencere:
+
+- Çalışma alanı dışında kalan bandı (`SystemParameters.WorkArea` ile ekran
+  boyutunun farkı) ölçüp tam ortasına yerleşir; çubuk üst kenardaysa oraya gider.
+- Sağdan 250 px pay bırakır ki saat/bildirim alanını örtmesin.
+- Görev çubuğuna tıklandığında explorer kendini öne alır; şerit `HWND_TOPMOST`'u
+  `WM_WINDOWPOSCHANGING` kancasında yeniden yazarak üstte kalır. Yoklama yok —
+  eski sürümdeki 2 saniyelik döngü masaüstü sağ tık menüsünü bozmuştu.
+
+İki tema **ayrı konum** tutar (`pencere.json` → `sol/ust` ve `seritSol/seritUst`).
+Tek konum paylaşsalardı her geçişte biri kayardı. "Konumu sıfırla" aktif temayı
+sıfırlar.
+
 ## Arayüz dili
 
 Arayüz **Windows görüntü diline göre** otomatik seçilir: Türkçe sistemde Türkçe,

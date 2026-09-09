@@ -72,12 +72,23 @@ public static class ZDuzeni
     const int WM_WINDOWPOSCHANGING = 0x0046;
     const int SWP_NOZORDER = 0x0004;
 
+    // Kart temasi masaustu seviyesinde durur (dipte = true). Serit temasi ise
+    // gorev cubugunun UZERINE binen bir katman; orada tam tersi gerekiyor:
+    // z-duzeni her degistiginde tepeye geri yazilmali, yoksa gorev cubuguna
+    // tiklandiginda explorer kendini one alip seridi ortuyor.
+    //
+    // Iki yon de AYNI kanca ile hallediliyor; yoklama (polling) yok. Onceki
+    // surumdeki 2 saniyelik SetWindowPos dongusu masaustu sag tik menusunu ve
+    // simge secimini bozuyordu - o hataya geri donmeyelim.
+    public static bool Dipte = true;
+
     static IntPtr Hook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == WM_WINDOWPOSCHANGING)
         {
             // WINDOWPOS: hwnd, hwndInsertAfter, x, y, cx, cy, flags
-            Marshal.WriteIntPtr(lParam, IntPtr.Size, (IntPtr)1);   // HWND_BOTTOM
+            IntPtr hedef = Dipte ? (IntPtr)1 : (IntPtr)(-1);   // HWND_BOTTOM / HWND_TOPMOST
+            Marshal.WriteIntPtr(lParam, IntPtr.Size, hedef);
             int bayrakOfset = IntPtr.Size * 2 + 16;
             int bayraklar = Marshal.ReadInt32(lParam, bayrakOfset);
             Marshal.WriteInt32(lParam, bayrakOfset, bayraklar & ~SWP_NOZORDER);
@@ -129,11 +140,13 @@ function Get-Ayarlar {
     #   tutup "24 saat geçti mi" diye bakmaktan daha doğru: kullanıcı için
     #   anlamlı sınır takvim değil, kotanın sıfırlanma anıdır.
     $v = [ordered]@{ sol = $null; ust = $null; arkaPlan = 'hafif'
-                     esik5 = 0; esikH = 0; atesli5 = $null; atesliH = $null }
+                     esik5 = 0; esikH = 0; atesli5 = $null; atesliH = $null
+                     tema = 'kart'; seritSol = $null; seritUst = $null }
     if (Test-Path $AyarDosya) {
         try {
             $j = Get-Content $AyarDosya -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($k in @('sol', 'ust', 'arkaPlan', 'esik5', 'esikH', 'atesli5', 'atesliH')) {
+            foreach ($k in @('sol', 'ust', 'arkaPlan', 'esik5', 'esikH', 'atesli5', 'atesliH',
+                             'tema', 'seritSol', 'seritUst')) {
                 if ($j.PSObject.Properties.Name -contains $k -and $null -ne $j.$k) { $v[$k] = $j.$k }
             }
         } catch { }
@@ -214,6 +227,8 @@ $METINLER = @{
         MENU_ARKAPLAN='Arka plan'; MENU_YOK='Yok (tam şeffaf)'; MENU_HAFIF='Hafif'; MENU_KOYU='Koyu'
         MENU_ESIK='Uyarı eşiği'; MENU_5SAAT='5 saatlik limit'; MENU_HAFTA='Haftalık'
         MENU_SIFIRLA='Konumu sıfırla (sağ üst)'; MENU_KAPAT='Kapat'; MENU_KAPALI='Kapalı'
+        MENU_TEMA='Görünüm'; TEMA_KART='Kart'; TEMA_SERIT='Şerit (alt bar)'
+        SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
         SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'
         SIFIRLANDI='sıfırlandı'; BIRAZDAN='birazdan sıfırlanır'
@@ -233,6 +248,8 @@ $METINLER = @{
         MENU_ARKAPLAN='Background'; MENU_YOK='None (transparent)'; MENU_HAFIF='Light'; MENU_KOYU='Dark'
         MENU_ESIK='Alert threshold'; MENU_5SAAT='5-hour limit'; MENU_HAFTA='Weekly'
         MENU_SIFIRLA='Reset position (top right)'; MENU_KAPAT='Close'; MENU_KAPALI='Off'
+        MENU_TEMA='Appearance'; TEMA_KART='Card'; TEMA_SERIT='Strip (taskbar)'
+        SERIT_5SA='5h'; SERIT_HAFTA='week'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
         SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'
         SIFIRLANDI='reset'; BIRAZDAN='resetting shortly'
@@ -271,6 +288,10 @@ $xamlMetin = @'
         <MenuItem x:Name="MnuBgHafif" Header="@@MENU_HAFIF@@"            IsCheckable="True"/>
         <MenuItem x:Name="MnuBgKoyu"  Header="@@MENU_KOYU@@"             IsCheckable="True"/>
       </MenuItem>
+      <MenuItem Header="@@MENU_TEMA@@">
+        <MenuItem x:Name="MnuTemaKart"  Header="@@TEMA_KART@@"  IsCheckable="True"/>
+        <MenuItem x:Name="MnuTemaSerit" Header="@@TEMA_SERIT@@" IsCheckable="True"/>
+      </MenuItem>
       <MenuItem Header="@@MENU_ESIK@@">
         <MenuItem x:Name="MnuEsik5" Header="@@MENU_5SAAT@@"/>
         <MenuItem x:Name="MnuEsikH" Header="@@MENU_HAFTA@@"/>
@@ -280,6 +301,45 @@ $xamlMetin = @'
       <MenuItem x:Name="MnuKapat"   Header="@@MENU_KAPAT@@"/>
     </ContextMenu>
   </Window.ContextMenu>
+
+  <Grid>
+  <!-- ŞERİT (alt bar) teması: görev çubuğunun üstünde ince, yatay bir çubuk -->
+  <Border x:Name="SeritKapsul" Visibility="Collapsed" CornerRadius="7" Padding="11,5,12,6"
+          Background="#D91C1F26" BorderBrush="#26FFFFFF" BorderThickness="1">
+    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+      <TextBlock Text="CLAUDE" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
+                 Foreground="#E8EDF5" Opacity="0.5" VerticalAlignment="Center" Margin="0,1,10,0"/>
+
+      <TextBlock Text="@@SERIT_5SA@@" FontFamily="Segoe UI" FontSize="10" Foreground="#E8EDF5"
+                 Opacity="0.55" VerticalAlignment="Center" Margin="0,1,5,0"/>
+      <Border Width="54" Height="5" CornerRadius="2.5" Background="#26FFFFFF" VerticalAlignment="Center">
+        <Border x:Name="Serit5Dolgu" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      </Border>
+      <TextBlock x:Name="Serit5Yuzde" FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
+                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="34" TextAlignment="Right"
+                 Margin="6,0,0,0" Typography.NumeralAlignment="Tabular"/>
+
+      <TextBlock Text="·" FontFamily="Segoe UI" FontSize="11" Foreground="#E8EDF5" Opacity="0.3"
+                 VerticalAlignment="Center" Margin="10,0,10,0"/>
+
+      <TextBlock Text="@@SERIT_HAFTA@@" FontFamily="Segoe UI" FontSize="10" Foreground="#E8EDF5"
+                 Opacity="0.55" VerticalAlignment="Center" Margin="0,1,5,0"/>
+      <Border Width="54" Height="5" CornerRadius="2.5" Background="#26FFFFFF" VerticalAlignment="Center">
+        <Border x:Name="SeritHDolgu" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      </Border>
+      <TextBlock x:Name="SeritHYuzde" FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
+                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="34" TextAlignment="Right"
+                 Margin="6,0,0,0" Typography.NumeralAlignment="Tabular"/>
+
+      <TextBlock Text="·" FontFamily="Segoe UI" FontSize="11" Foreground="#E8EDF5" Opacity="0.3"
+                 VerticalAlignment="Center" Margin="10,0,10,0"/>
+
+      <TextBlock x:Name="SeritKalan" FontFamily="Segoe UI" FontSize="10" Foreground="#E8EDF5"
+                 Opacity="0.55" VerticalAlignment="Center" Margin="0,1,0,0"/>
+      <TextBlock x:Name="SeritYas" FontFamily="Segoe UI" FontSize="9.5" Foreground="#E8A33D"
+                 VerticalAlignment="Center" Margin="10,1,0,0"/>
+    </StackPanel>
+  </Border>
 
   <Border x:Name="Kapsul" CornerRadius="16" Padding="18,13,18,15" Background="#59000000">
     <StackPanel x:Name="Kok" Width="232">
@@ -411,6 +471,7 @@ $xamlMetin = @'
                  MaxWidth="232"/>
     </StackPanel>
   </Border>
+  </Grid>
 </Window>
 '@
 
@@ -438,6 +499,12 @@ $SifirH = Get-Ogesi 'SifirH';  $YuzdeH = Get-Ogesi 'YuzdeH'; $DolguH = Get-Ogesi
 $OlayKutu = Get-Ogesi 'OlayKutu'; $OlayIkon = Get-Ogesi 'OlayIkon'
 $OlayMetin = Get-Ogesi 'OlayMetin'; $OlayAlt = Get-Ogesi 'OlayAlt'
 $HizUyari = Get-Ogesi 'HizUyari'
+$SeritKapsul = Get-Ogesi 'SeritKapsul'
+$Serit5Dolgu = Get-Ogesi 'Serit5Dolgu'; $Serit5Yuzde = Get-Ogesi 'Serit5Yuzde'
+$SeritHDolgu = Get-Ogesi 'SeritHDolgu'; $SeritHYuzde = Get-Ogesi 'SeritHYuzde'
+$SeritKalan  = Get-Ogesi 'SeritKalan';  $SeritYas    = Get-Ogesi 'SeritYas'
+$SERIT_IZ = 54.0    # şeritteki mini bar rayının genişliği (XAML ile aynı)
+$SERIT_TEPSI_PAYI = 250.0   # sağdaki saat/bildirim alanını örtmemek için pay
 $HaftaBolum = Get-Ogesi 'HaftaBolum'; $BugunOzet = Get-Ogesi 'BugunOzet'
 $CUBUKLAR  = @(0..6 | ForEach-Object { Get-Ogesi ('Cub{0}' -f $_) })
 $ETIKETLER = @(0..6 | ForEach-Object { Get-Ogesi ('Etk{0}' -f $_) })
@@ -456,6 +523,98 @@ function Set-ArkaPlan {
     (Get-Ogesi 'MnuBgYok').IsChecked   = ($Ad -eq 'yok')
     (Get-Ogesi 'MnuBgHafif').IsChecked = ($Ad -eq 'hafif')
     (Get-Ogesi 'MnuBgKoyu').IsChecked  = ($Ad -eq 'koyu')
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Görünüm teması: kart (masaüstü seviyesinde) / şerit (görev çubuğu üstünde)
+#
+# Şerit, görev çubuğu widget'ı gibi HER ZAMAN görünür olmalı; o yüzden o modda
+# "hep dipte" kancasını kapatıp Topmost'a geçiyoruz. Kart teması eskisi gibi
+# masaüstü seviyesinde durur ve hiçbir pencerenin önüne geçmez.
+# ─────────────────────────────────────────────────────────────────────────────
+function Set-Tema {
+    param([string]$Ad, [switch]$Kaydetme)
+
+    if ($Ad -ne 'serit') { $Ad = 'kart' }
+    $script:Ayar.tema = $Ad
+    $seritMi = ($Ad -eq 'serit')
+
+    $SeritKapsul.Visibility = $(if ($seritMi) { 'Visible' } else { 'Collapsed' })
+    $Kapsul.Visibility      = $(if ($seritMi) { 'Collapsed' } else { 'Visible' })
+
+    [ZDuzeni]::Dipte = -not $seritMi
+    $win.Topmost = $seritMi
+
+    (Get-Ogesi 'MnuTemaKart').IsChecked  = -not $seritMi
+    (Get-Ogesi 'MnuTemaSerit').IsChecked = $seritMi
+
+    Update-Gorunum      # şerit öğeleri boş doğmasın
+    Set-TemaKonumu      # ölçüler oturduktan SONRA konumla
+    if (-not $Kaydetme) { Save-Ayarlar -Ayar $script:Ayar }
+}
+
+# Her temanın kendi konumu var: kartı sağ üstte, şeridi görev çubuğunun üstünde
+# tutmak istersiniz; tek konumu paylaşsalardı tema değişiminde biri kayardı.
+function Set-TemaKonumu {
+    # Yerlesim daha oturmadan olcu almak yanlis konum uretiyor (serit 28 px
+    # olacakken gecis ortasinda 72 px okunuyordu). Bu yuzden konumlandirmayi
+    # yerlesim tamamlandiktan SONRAya erteliyoruz.
+    $win.Dispatcher.BeginInvoke(
+        [System.Windows.Threading.DispatcherPriority]::Loaded,
+        [System.Action]{ Set-TemaKonumuSimdi }) | Out-Null
+}
+
+function Set-TemaKonumuSimdi {
+    $win.UpdateLayout()
+
+    if ($script:Ayar.tema -eq 'serit') {
+        if ($null -ne $script:Ayar.seritSol -and $null -ne $script:Ayar.seritUst) {
+            Set-PencereKonumu -Sol ([double]$script:Ayar.seritSol) -Ust ([double]$script:Ayar.seritUst)
+        } else {
+            Set-SeritVarsayilanKonumu
+        }
+    } else {
+        if ($null -ne $script:Ayar.sol -and $null -ne $script:Ayar.ust) {
+            Set-PencereKonumu -Sol ([double]$script:Ayar.sol) -Ust ([double]$script:Ayar.ust)
+        } else {
+            Set-VarsayilanKonum
+        }
+    }
+}
+
+# Serit, gorev cubugunun UZERINE oturur - onun bir parcasiymis gibi gorunsun
+# diye. Windows 11'de gorev cubuguna icerik eklemenin desteklenen bir yolu yok
+# (deskband API'si kaldirildi); explorer'a mudahale eden ucuncu parti yontemler
+# ise hem kirilgan hem de kurumsal guvenlik yazilimlarinin engelledigi turden.
+# Bu yuzden ustune binen, her zaman gorunur ince bir katman kullaniyoruz.
+function Get-GorevCubuguSeridi {
+    # Ekranin calisma alani disinda kalan bant = gorev cubugu. Kenari kendisi
+    # soyler; kullanici cubugu ust/alt kenara tasirsa serit onu takip eder.
+    $ca = [System.Windows.SystemParameters]::WorkArea
+    $ey = [System.Windows.SystemParameters]::PrimaryScreenHeight
+
+    if ($ey - $ca.Bottom -ge 20) { return @{ Ust = $ca.Bottom; Yuk = $ey - $ca.Bottom } }
+    if ($ca.Top -ge 20)          { return @{ Ust = 0.0;        Yuk = $ca.Top } }
+    return $null   # yan kenarda ya da otomatik gizlenen cubuk: bant yok
+}
+
+function Set-SeritVarsayilanKonumu {
+    $win.UpdateLayout()
+    $g = if ([double]::IsNaN($win.ActualWidth)  -or $win.ActualWidth  -le 0) { 430 } else { $win.ActualWidth }
+    $y = if ([double]::IsNaN($win.ActualHeight) -or $win.ActualHeight -le 0) {  30 } else { $win.ActualHeight }
+
+    $bant = Get-GorevCubuguSeridi
+    if ($null -ne $bant) {
+        # Yatayda saat/tepsi bolgesini ortmeyelim: sagdan SERIT_TEPSI_PAYI kadar geride dur.
+        $sol = [Math]::Max(0, [System.Windows.SystemParameters]::PrimaryScreenWidth - $g - $SERIT_TEPSI_PAYI)
+        $ust = $bant.Ust + [Math]::Max(0, ($bant.Yuk - $y) / 2)
+    } else {
+        # Cubuk yan kenarda / gizli: calisma alaninin sag alt kosesine yasla.
+        $ca = [System.Windows.SystemParameters]::WorkArea
+        $sol = [Math]::Max(0, $ca.Right - $g - 12)
+        $ust = [Math]::Max(0, $ca.Bottom - $y - 6)
+    }
+    Set-PencereKonumu -Sol $sol -Ust $ust
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -798,6 +957,7 @@ function Update-Gorunum {
         $Uyari.Text = (T 'VERI_YOK')
         Update-Bar $null $Yuzde5 $Sifir5 $Dolgu5
         Update-Bar $null $YuzdeH $SifirH $DolguH
+        if ($script:Ayar.tema -eq 'serit') { Update-Serit $null }
         return
     }
 
@@ -852,6 +1012,51 @@ function Update-Gorunum {
 
     Test-Esik $script:Veri.five_hour (T 'ESIK_5SAAT') 'esik5' 'atesli5'
     Test-Esik $script:Veri.seven_day (T 'ESIK_HAFTA') 'esikH' 'atesliH'
+
+    if ($script:Ayar.tema -eq 'serit') { Update-Serit $bitisDk }
+}
+
+# Kart temasındaki bilgiyi tek satıra sıkıştırır. Renk/bayatlık kuralları
+# kartla AYNI kaynaktan (Get-BarRengi + $script:VeriTaze) gelir; iki tema
+# birbirinden farklı bir gerçeklik göstermesin.
+function Update-Serit {
+    param($BitisDk)
+
+    $gri  = '#5A6472'
+    $bes  = if ($null -ne $script:Veri) { $script:Veri.five_hour } else { $null }
+    $haf  = if ($null -ne $script:Veri) { $script:Veri.seven_day } else { $null }
+
+    foreach ($p in @(
+        @{ P = $bes; Y = $Serit5Yuzde; D = $Serit5Dolgu; B = $BitisDk },
+        @{ P = $haf; Y = $SeritHYuzde; D = $SeritHDolgu; B = $null })) {
+
+        if ($null -eq $p.P -or $null -eq $p.P.used_percentage) {
+            $p.Y.Text = '—'
+            $p.D.Width = 0
+            continue
+        }
+
+        $sifirlanma = ConvertFrom-UnixSaniye $p.P.resets_at
+        $yuzde = [double]$p.P.used_percentage
+        if ($null -ne $sifirlanma -and $sifirlanma -le [DateTime]::Now) { $yuzde = 0 }
+
+        $p.Y.Text = ('{0}%' -f [int][Math]::Round($yuzde))
+
+        # [Math]::Min burada KULLANILMAZ: int aşırı yüklemesi seçilip oran
+        # 1'e yuvarlanıyor ve bütün barlar dolu görünüyordu.
+        $oran = $yuzde / 100.0
+        if ($oran -lt 0.0) { $oran = 0.0 }
+        if ($oran -gt 1.0) { $oran = 1.0 }
+        $p.D.Width = $oran * $SERIT_IZ
+
+        $renk = if ($script:VeriTaze) {
+            Get-BarRengi -Yuzde $yuzde -Sifirlanma $sifirlanma -BitisDk $p.B
+        } else { $gri }
+        $p.D.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($renk)
+    }
+
+    $SeritKalan.Text = if ($null -ne $bes) { Format-Kalan (ConvertFrom-UnixSaniye $bes.resets_at) } else { '' }
+    $SeritYas.Text   = if ($script:VeriTaze) { '' } else { $Yas.Text }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -931,8 +1136,13 @@ $win.Add_MouseLeftButtonUp({
     if ($null -ne $script:surukle) {
         $win.ReleaseMouseCapture()
         $script:surukle = $null
-        $script:Ayar.sol = $script:KonumSol
-        $script:Ayar.ust = $script:KonumUst
+        if ($script:Ayar.tema -eq 'serit') {
+            $script:Ayar.seritSol = $script:KonumSol
+            $script:Ayar.seritUst = $script:KonumUst
+        } else {
+            $script:Ayar.sol = $script:KonumSol
+            $script:Ayar.ust = $script:KonumUst
+        }
         Save-Ayarlar -Ayar $script:Ayar
     }
 })
@@ -994,13 +1204,21 @@ Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsik5') -EsikAlan 'esik5'
 Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsikH') -EsikAlan 'esikH'
 
 (Get-Ogesi 'MnuSifirla').Add_Click({
-    Set-VarsayilanKonum
-    $script:Ayar.sol = $script:KonumSol
-    $script:Ayar.ust = $script:KonumUst
+    if ($script:Ayar.tema -eq 'serit') {
+        Set-SeritVarsayilanKonumu
+        $script:Ayar.seritSol = $script:KonumSol
+        $script:Ayar.seritUst = $script:KonumUst
+    } else {
+        Set-VarsayilanKonum
+        $script:Ayar.sol = $script:KonumSol
+        $script:Ayar.ust = $script:KonumUst
+    }
     Save-Ayarlar -Ayar $script:Ayar
 })
 
 (Get-Ogesi 'MnuKapat').Add_Click({ $win.Close() })
+(Get-Ogesi 'MnuTemaKart').Add_Click({  Set-Tema 'kart' })
+(Get-Ogesi 'MnuTemaSerit').Add_Click({ Set-Tema 'serit' })
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sağ tık menüsü kapatma nöbetçisi
@@ -1080,11 +1298,38 @@ $win.Add_SourceInitialized({
 
 $win.Add_ContentRendered({
     Set-MasaustuSeviyesi
+    Set-Tema $script:Ayar.tema -Kaydetme    # kayıtlı temayı geri yükle
     $veriTimer.Start()
 
     # Öz-test (KULLANIM_ESIKTEST=1): eşik menüsü öğesine GERÇEKTEN tıklar.
     # Bu yol daha önce sınanmamıştı ve closure kapsam hatası yüzünden widget'ı
     # çökertiyordu; regresyon buradan yakalanır.
+    # Öz-test (KULLANIM_TEMATEST=1): tema menüsüne GERÇEKTEN tıklar. Eşik
+    # menüsündeki closure kapsam hatası tam da "elle ayar dosyası yazarak
+    # test ettim" diye gözden kaçmıştı; tema anahtarı aynı tuzağa düşmesin.
+    if ($env:KULLANIM_TEMATEST -eq '1') {
+        $tikla = {
+            param($Ad)
+            (Get-Ogesi $Ad).RaiseEvent(
+                (New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.MenuItem]::ClickEvent)))
+        }
+        foreach ($adim in @(@('MnuTemaSerit', 'serit'), @('MnuTemaKart', 'kart'))) {
+            try {
+                & $tikla $adim[0]
+                $win.UpdateLayout()
+                Write-Tani ("TEMATEST {0}: ayar={1} serit={2} kart={3} topmost={4} dipte={5}" -f `
+                    $adim[1], $script:Ayar.tema, $SeritKapsul.Visibility, $Kapsul.Visibility,
+                    $win.Topmost, [ZDuzeni]::Dipte)
+            } catch {
+                Write-Tani ("TEMATEST {0} HATA: {1}" -f $adim[1], $_.Exception.Message)
+            }
+        }
+        # Konumlandırma ertelenmiş olduğu için ölçüyü bir tur sonra al.
+        $win.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::ApplicationIdle,
+            [System.Action]{ Write-Tani ("TEMATEST konum: sol={0} ust={1} gen={2} yuk={3}" -f `
+                $win.Left, $win.Top, $win.ActualWidth, $win.ActualHeight) }) | Out-Null
+    }
+
     if ($env:KULLANIM_ESIKTEST -eq '1') {
         try {
             $hedef = (Get-Ogesi 'MnuEsikH').Items | Where-Object { [int]$_.Tag -eq 85 } | Select-Object -First 1
