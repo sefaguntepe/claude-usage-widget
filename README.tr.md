@@ -84,6 +84,32 @@ yeni tetik gelirse önceki çalışma iptal edilir.
 > örnekleme 60 sn'de bir yazıyor — yenileme de 60 sn olsaydı zamanlama
 > kayması yüzünden örnekler atlanabilirdi.
 
+## Veri ne zaman güncellenir?
+
+İki kaynak, tek kural: **ölçüm zamanı daha yeni olan kazanır.** İkisi de aynı
+API'nin fotoğrafı; kaynak sayıyı değiştirmez, yalnızca tazeliğini.
+
+| Kaynak | Ne zaman yazılır | Ne verir |
+|---|---|---|
+| **Terminal** — Claude Code statusLine → `durum.json` | Her Claude yanıtında + 30 sn'de bir — yalnızca etkileşimli terminal oturumunda | Yüzde + sıfırlanma saati; anında |
+| **Masaüstü** — uygulamanın kendi `plan-usage-history.json`'ı | Uygulama açıkken **15 dk'da bir**; Claude tepsi simgesine sağ tıkladıktan sonra 30 dk boyunca **5 dk'da bir**; 10 dk boştaysanız durur | Yalnızca yüzde |
+
+Widget iki dosyaya saniyede bir bakar. Etiketlerin anlamı:
+
+| Görünen | Anlamı |
+|---|---|
+| `canlı` | Veri terminalden, olay bazlı |
+| `masaüstü · 7 dk önce` | Veri masaüstü uygulamasının son örneğinden, gerçek yaşıyla |
+| `38% ▲` | O ölçümden ≥ 90 sn sonra Claude bir tur bitirdi (hook'lar masaüstünde de ateşleniyor). Gerçek değer daha yüksek; widget ne kadar olduğunu uydurmaz |
+| geri sayım | Yalnızca sıfırlanma saati *bilinen* pencerede (terminalden geldi ve pencere hâlâ açık). Masaüstü dosyasında bu bilgi yok — boş kalır, uydurulmaz |
+| gri bar + amber yaş | İki kaynak da sustu (terminal > 5 dk, masaüstü > 20 dk). Sayı doğru ama tarihî |
+
+Terminal açmadan masaüstünde çalışıyorsanız: sayı 15 dk'da bir yenilenir,
+aradaki boşluğu `▲` doldurur. Bir süre daha sık istiyorsanız Claude tepsi
+simgesine bir kez sağ tıklayın — 30 dakika boyunca 5 dk'da bir gelir. Widget
+kendisi hiçbir zaman ağa çıkmaz, kimlik bilgisi okumaz; iki uygulamanın zaten
+diske yazdığını okur.
+
 ## Dosyalar
 
 | Dosya | Görevi |

@@ -57,6 +57,33 @@ The file has no `resets_at`, so when the desktop sample wins the countdown is
 kept only if the status line's window is still open (reset in the future and
 percentage not lower); otherwise it is left blank rather than guessed.
 
+## When does the number update?
+
+Two sources, one rule: **the more recently measured one wins.** Both are
+snapshots of the same API, so the source never changes the number — only how
+fresh it is.
+
+| Source | Written when | Gives |
+|---|---|---|
+| **Terminal** — Claude Code status line → `durum.json` | On every Claude reply, plus every 30 s — only in an interactive terminal session | Percentages + reset times, instantly |
+| **Desktop app** — its own `plan-usage-history.json` | Every **15 min** while the app is open; every **5 min** for 30 min after you right-click the Claude tray icon; paused while you are idle 10+ min | Percentages only |
+
+The widget polls both files once a second. What the labels mean:
+
+| You see | It means |
+|---|---|
+| `live` | Data from the terminal, event-driven |
+| `desktop · 7 min ago` | Data from the desktop app's last sample, with its real age |
+| `38% ▲` | Claude finished a turn ≥ 90 s after that measurement (hooks fire in the desktop app too). The real value is higher; the widget will not guess by how much |
+| countdown | Shown only when the reset time is *known* (came from the terminal and that window is still open). The desktop file has none — left blank, not invented |
+| grey bars + amber age | Both sources are silent (terminal > 5 min, desktop > 20 min). The number is correct but historical |
+
+Working in the desktop app with no terminal: numbers refresh every 15 minutes,
+with `▲` filling the gaps. Want it faster for a while? Right-click the Claude
+tray icon once — 5-minute samples for the next 30 minutes. The widget itself
+never touches the network or your credentials; it reads what two apps already
+write to disk.
+
 ## Features
 
 - **Works with the desktop app** — updates every 15 minutes from the app's own
