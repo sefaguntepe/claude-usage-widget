@@ -24,14 +24,18 @@ const os = require('os');
 const KLASOR = path.join(process.env.APPDATA || os.homedir(), 'ClaudeKullanim');
 const DOSYA = path.join(KLASOR, 'olay.json');
 
+/* Atomik yazma -- durum-yaz.js'teki jsonYaz ile ayni gerekce. Burada daha da
+   onemli: hook'lar masaustu uygulamasinda da atesleniyor, yani olay.json'un
+   es zamanli yazicisi durum.json'dan fazla. Gecici ad surece ozel, ve
+   basarisizlikta canli dosyaya duz yazma YOK. */
 function yaz(veri) {
-  const tmp = DOSYA + '.tmp';
+  const tmp = `${DOSYA}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(KLASOR, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify(veri), 'utf8');
     fs.renameSync(tmp, DOSYA);
   } catch (e) {
-    try { fs.writeFileSync(DOSYA, JSON.stringify(veri), 'utf8'); } catch (e2) { /* sessiz */ }
+    try { fs.unlinkSync(tmp); } catch (e2) { /* zaten yok */ }
   }
 }
 

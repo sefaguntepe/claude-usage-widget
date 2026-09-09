@@ -71,14 +71,27 @@ function jsonOku(p, varsayilan) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return varsayilan; }
 }
 
+/* Atomik yazma. Iki nokta onemli:
+
+   1) Gecici dosya adi SURECE OZEL. Sabit bir '.tmp' adini butun oturumlar
+      paylasiyordu: A yazar, B ustune yazar, A B'nin baytlarini yerine tasir,
+      B'nin rename'i ENOENT ile duser. PID ile ayirmak bunu bitiriyor.
+   2) Basarisizlikta CANLI DOSYAYA YAZILMAZ. Eski surum duz writeFileSync'e
+      dusuyordu; o da rename'in tam olarak onledigi yarim-okuma penceresini
+      geri getiriyordu (widget saniyede bir okuyor). Yazamiyorsak yazmayiz --
+      okuyucu bir onceki saglam surumu gormeye devam eder, bir sonraki tur
+      zaten yeniden dener.
+
+   Gecici dosya hedefle AYNI klasorde: rename'in ayni birim icinde kalmasi
+   (Windows'ta MoveFileEx replace) atomikligin sarti. */
 function jsonYaz(p, veri) {
-  const tmp = p + '.tmp';
+  const tmp = `${p}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(KLASOR, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify(veri), 'utf8');
     fs.renameSync(tmp, p);
   } catch (e) {
-    try { fs.writeFileSync(p, JSON.stringify(veri), 'utf8'); } catch (e2) { /* sessiz */ }
+    try { fs.unlinkSync(tmp); } catch (e2) { /* zaten yok */ }
   }
 }
 
@@ -290,13 +303,7 @@ function baglanti(url, metin) {
 function main() {
   let d;
   try {
-    const _ham = fs.readFileSync(0, 'utf8');
-    // GECICI IZ KAYDI (tani icin - kaldirilacak)
-    try {
-      fs.appendFileSync(path.join(os.tmpdir(), 'sl-ham.log'),
-        new Date().toISOString() + ' >>> ' + _ham.slice(0, 1500) + '\n');
-    } catch (e2) { /* sessiz */ }
-    d = JSON.parse(_ham);
+    d = JSON.parse(fs.readFileSync(0, 'utf8'));
   } catch (e) {
     process.stdout.write('');
     return;

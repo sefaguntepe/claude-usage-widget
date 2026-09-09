@@ -166,6 +166,16 @@ $COK_BAYAT_SN  = 43200  # 12 saatten eskiyse sebebini de yaz
 # olmalı. 232 + 2×18 kapsül dolgusu = 268 → masaüstü saat widget'ı ile aynı en.
 $IZ_GENISLIK = 232.0
 $BAYAT_SN    = 300      # 5 dk'dan eski veri "bayat" sayılır
+# Gelecek tarihli ölçüm ZEHİRDİR. Yaşı negatif olduğu için hiçbir bayatlık
+# eşiğini geçemez: bar asla grileşmez, yaş etiketi asla uyarmaz, eşik pop-up'ı
+# yanlış sayı üzerinde kurulu kalır — ve birleştirmede "ölçüm zamanı yeni olan
+# kazanır" kuralını kalıcı olarak kazanır. Yeniden başlatmadan çıkış yok.
+#
+# İki üreticinin de saatini biz kontrol etmiyoruz (Node statusLine betiği ve
+# masaüstü uygulamasının `t` alanı); geriye NTP düzeltmesi ya da UTC/yerel
+# karışması bu durumu üretmeye yeter. Olay yolu bu korumayı zaten yapıyordu
+# (Update-Olay, -lt -60); ölçüm yolunda eksikti.
+$GELECEK_PAYI_SN = 300      # gerçek saat kaymasına tolerans; ötesi reddedilir
 $MASAUSTU_BAYAT_SN = 1200   # masaüstü 15 dk'da bir örnekler (+5 dk pay); ötesi bayat
 $MASAUSTU_HIZ_DK   = 60     # tüketim hızı için geriye bakış (15 dk'lık örneklerle 45 dk çok dar)
 
@@ -250,9 +260,20 @@ function Format-Kalan {
     return ((T 'KALAN_SADK') -f [int]$fark.TotalHours, ($fark.Minutes))
 }
 
+# Bir ölçüm zamanı damgası kabul edilebilir mi? Tek ölçüt: makul bir paydan
+# fazla İLERİDE olmasın. Geçmişteki eskilik ayrı bir mesele (bayatlık eşikleri).
+function Test-OlcumZamani {
+    param($Ms)
+    if ($null -eq $Ms) { return $false }
+    $ileriSn = ([double]$Ms - [double][DateTimeOffset]::Now.ToUnixTimeMilliseconds()) / 1000.0
+    return ($ileriSn -le $GELECEK_PAYI_SN)
+}
+
 function Format-Yas {
     param([datetime]$Zaman)
     $fark = [DateTime]::Now - $Zaman
+    # İleri tarihli damga "az önce" diye okunmasın — sebebini söyle.
+    if ($fark.TotalSeconds -lt -$GELECEK_PAYI_SN) { return (T 'YAS_ILERI') }
     if ($fark.TotalSeconds -lt 90)  { return (T 'YAS_SIMDI') }
     if ($fark.TotalMinutes -lt 60)  { return ((T 'YAS_DK') -f [int]$fark.TotalMinutes) }
     if ($fark.TotalHours -lt 24)    { return ((T 'YAS_SA') -f [int]$fark.TotalHours) }
@@ -311,6 +332,7 @@ $METINLER = @{
         SIFIRLANDI='sıfırlandı'; BIRAZDAN='birazdan sıfırlanır'
         KALAN_DK='{0} dk sonra'; KALAN_SADK='{0} sa {1} dk sonra'
         YAS_SIMDI='az önce'; YAS_DK='{0} dk önce'; YAS_SA='{0} sa önce'; YAS_GUN='{0} gün önce'
+        YAS_ILERI='saat tutarsız'
         SURE_DK='{0} dk'; SURE_SADK='{0} sa {1} dk'
         HIZ_UYARI='Bu hızla ~{0} içinde biter'
         VERI_YOK='Henüz veri yok. Claude masaüstü uygulaması ya da terminalde Claude Code açılınca dolar.'
@@ -334,6 +356,7 @@ $METINLER = @{
         SIFIRLANDI='reset'; BIRAZDAN='resetting shortly'
         KALAN_DK='in {0} min'; KALAN_SADK='in {0} h {1} min'
         YAS_SIMDI='just now'; YAS_DK='{0} min ago'; YAS_SA='{0} h ago'; YAS_GUN='{0} d ago'
+        YAS_ILERI='clock mismatch'
         SURE_DK='{0} min'; SURE_SADK='{0} h {1} min'
         HIZ_UYARI='At this rate it runs out in ~{0}'
         VERI_YOK='No data yet. It fills once the Claude desktop app or a terminal Claude Code session is running.'
@@ -890,8 +913,15 @@ function Read-Masaustu {
             Write-Tani 'masaustu: sema uyumsuz, yok sayildi'
             $script:Masaustu = $null; return
         }
-        $ornekler = @($j.samples | Where-Object { (Test-Ozellik $_ 't') -and (Test-Ozellik $_ 'u') } |
-                     Sort-Object { [int64]$_.t })
+        # Süzme örnek listesinin TAMAMINA uygulanıyor: hız hesabı ve pencere
+        # başlangıcı da bu seriden türüyor, ileri tarihli tek örnek ikisini de
+        # bozardı.
+        $ham = @($j.samples | Where-Object { (Test-Ozellik $_ 't') -and (Test-Ozellik $_ 'u') } |
+                 Sort-Object { [int64]$_.t })
+        $ornekler = @($ham | Where-Object { Test-OlcumZamani ([int64]$_.t) })
+        if ($ornekler.Count -lt $ham.Count) {
+            Write-Tani ("masaustu: {0} ileri tarihli ornek atildi" -f ($ham.Count - $ornekler.Count))
+        }
         if ($ornekler.Count -eq 0) { $script:Masaustu = $null; return }
         $son = $ornekler[-1]
 
@@ -915,21 +945,29 @@ function Read-Masaustu {
 # Masaüstü kazanırsa yüzdeler oradan gelir; sıfırlanma saati yalnızca
 # statusLine'ın gördüğü pencere hâlâ açıksa korunur — pencere dönmüşse
 # uydurulmaz, boş bırakılır (geri sayım gösterilmez).
+function Get-DurumOlcumu {
+    param($Durum)
+    if (Test-Ozellik $Durum 'olcumZamani') { return [int64]$Durum.olcumZamani }
+    if (Test-Ozellik $Durum 'yazildi')     { return [int64]$Durum.yazildi }
+    return 0
+}
+
 function Merge-Kaynaklar {
     $d = $script:DurumHam
     $m = $script:Masaustu
-    if ($null -eq $m) { return $d }
 
-    $dOlcum = $null
-    if ($null -ne $d) {
-        $dOlcum = if (Test-Ozellik $d 'olcumZamani') { [int64]$d.olcumZamani }
-                  elseif (Test-Ozellik $d 'yazildi')  { [int64]$d.yazildi } else { 0 }
-        if ($dOlcum -ge $m.t) { return $d }          # statusLine daha taze
-    }
+    # statusLine ileri tarihliyse hiç güvenme: ne yarışa girsin ne de
+    # sıfırlanma saatini ödünç versin.
+    $dGecerli = ($null -ne $d) -and (Test-OlcumZamani (Get-DurumOlcumu $d))
+    if ($null -ne $d -and -not $dGecerli) { Write-Tani 'durum.json: ileri tarihli olcum, yok sayildi' }
+
+    if ($null -eq $m) { return $(if ($dGecerli) { $d } else { $null }) }
+
+    if ($dGecerli -and (Get-DurumOlcumu $d) -ge $m.t) { return $d }   # statusLine daha taze
 
     $bes = [pscustomobject]@{ used_percentage = $m.fh; resets_at = $null; pencere_anahtari = $m.pencere5 }
     $haf = [pscustomobject]@{ used_percentage = $m.sd; resets_at = $null; pencere_anahtari = $m.pencereH }
-    if ($null -ne $d) {
+    if ($dGecerli) {
         foreach ($cift in @(@($bes, 'five_hour', $m.fh), @($haf, 'seven_day', $m.sd))) {
             $hedef, $alan, $yeni = $cift
             if (-not (Test-Ozellik $d $alan) -or -not (Test-Ozellik $d.$alan 'resets_at')) { continue }
@@ -942,7 +980,7 @@ function Merge-Kaynaklar {
 
     $v = [ordered]@{ yazildi = $m.t; olcumZamani = $m.t; five_hour = $null; seven_day = $null
                      hiz = $null; haftalik = @(); oturum = $null }
-    if ($null -ne $d) { foreach ($oz in $d.PSObject.Properties) { $v[$oz.Name] = $oz.Value } }
+    if ($dGecerli) { foreach ($oz in $d.PSObject.Properties) { $v[$oz.Name] = $oz.Value } }
     $v.five_hour = $bes
     $v.seven_day = $haf
     $v.olcumZamani = $m.t
@@ -1323,9 +1361,10 @@ function Update-Gorunum {
         # Masaüstü kaynağı 15 dk'da bir örnekler; ona 5 dk'lık eşik uygulansa
         # sürekli "bayat" görünür. Eşik kaynağa göre.
         $bayatEsigi = if ((Get-Kaynak) -eq 'masaustu') { $MASAUSTU_BAYAT_SN } else { $BAYAT_SN }
-        $script:VeriTaze = ($yasSn -le $bayatEsigi)
+        # Alt sınır: ileri tarihli ölçüm "sonsuza kadar taze" sayılmasın.
+        $script:VeriTaze = ($yasSn -le $bayatEsigi -and $yasSn -ge -$GELECEK_PAYI_SN)
         # Bayat veri: soluklaştır ve yaşını yaz — güncel sanıp bakmayalım.
-        if ($yasSn -gt $bayatEsigi) {
+        if ($yasSn -gt $bayatEsigi -or $yasSn -lt -$GELECEK_PAYI_SN) {
             $Kok.Opacity = 0.45
             $Yas.Text = Format-Yas $yazildi
             $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8A33D')
