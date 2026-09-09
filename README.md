@@ -93,9 +93,23 @@ write to disk.
 - **▲ = "at least this much"** — hooks fire in the desktop app too, so when
   Claude finishes a turn after the last measurement the 5-hour percentage gets
   a `▲`: the real value is higher, the widget just will not guess by how much.
-- **Two looks** — a desktop card, or a slim strip that sits on top of the
-  taskbar with the two limits stacked. Right-click → *Appearance*. Each keeps
-  its own position.
+- **Four layouts** — right-click → *Appearance*. Each keeps its own position.
+
+  | Layout | Size | For |
+  |---|---|---|
+  | Card | 268×187 | Full panel: bars, 7-day history, event line |
+  | Strip | 281×38 | Two rows on top of the taskbar |
+  | Compact | 132×59 | Just the two percentages |
+  | Terminal | 197×80 | Monospace, character bars |
+
+  ![Layouts](docs/layouts.png)
+
+- **Five colour palettes** — right-click → *Colours*: Widget (default),
+  Catppuccin Mocha, Dracula, Nord, Gruvbox Dark. Bound as `DynamicResource`,
+  so switching needs no restart. The *Background* menu now picks
+  transparency; the palette picks the colour.
+
+  ![Colour themes](docs/themes.png)
 
   ![Strip theme](docs/strip.png)
 
@@ -114,6 +128,14 @@ write to disk.
 - **Enriched terminal status line** — model, reasoning effort, fast mode,
   active agent, output style, context %, limits, clickable PR link, and a
   version badge when your Claude Code is out of date
+
+## Credits
+
+Palette values come from the well-known open-source colour schemes
+[Catppuccin](https://github.com/catppuccin/catppuccin),
+[Dracula](https://github.com/dracula/dracula-theme),
+[Nord](https://github.com/nordtheme/nord) and
+[Gruvbox](https://github.com/morhetz/gruvbox) — colours only, no code.
 
 ## Requirements
 

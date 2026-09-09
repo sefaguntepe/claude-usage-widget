@@ -268,6 +268,18 @@ görürse dokunmadan durur ve başkasına ait hook girişlerini korur (yalnızca
 
 ## Tuzaklar (aynı hataya düşmemek için)
 
+- **`-WindowStyle Hidden` tek başına yetmez.** Kullanıcının varsayılan konsol
+  barındırıcısı Windows Terminal ise arkada boş bir terminal penceresi açık
+  kalır: PowerShell'in gizlemeye çalıştığı pencere sözde konsoldur
+  (`CASCADIA_HOSTING_WINDOW_CLASS`), gerçek pencerenin sahibi Terminal'dir.
+  Başlangıç kısayolu bu yüzden `conhost.exe` üzerinden çağırıyor; betik de
+  açılışta kendi konsolunu gizleyip bırakıyor.
+- **Terminal yerleşiminde `░` (U+2591) kullanmayın.** Consolas onu boşluk gibi
+  çiziyor, bar yarım görünüyor. Dolu ve boş kısım aynı blok karakteri (U+2588),
+  ayrım renkle.
+- **XAML'de aynı öğeye iki `x:Name` vermeyin** — `[xml]` dönüşümü "yinelenen
+  öznitelik" hatasıyla düşer ve hata mesajı tüm XAML'i basar.
+
 - **`[Math]::Min(1, $oran)` YAZMAYIN.** Literal `1` Int32 olduğu için PowerShell
   tamsayı aşırı yüklemesini seçer ve `0.56` → `1` yuvarlanır; her bar %100 dolu
   çizilir. Sınırlamayı elle `if` ile yapın.
@@ -329,6 +341,33 @@ Sağ tık → **Görünüm** ile iki yerleşim arasında geçiş yapılır:
 |---|---|
 | **Kart** | Masaüstünde duran pano. Masaüstü seviyesinde kalır, hiçbir pencerenin önüne geçmez. |
 | **Şerit (alt bar)** | Görev çubuğunun üzerine oturan iki satırlık ince katman; 5 saat ve hafta alt alta. Her zaman görünür. |
+| **Kompakt** | 132×59 — yalnızca iki büyük yüzde ve mini bar. Göz ucuyla bakmak için. |
+| **Terminal** | 197×80 — tek aralıklı yazı, karakterden bar. Kod ekranına karışmayan görünüm. |
+
+![Yerleşimler](docs/layouts.png)
+
+Her yerleşim **kendi konumunu** tutar; ortak tek konum olsaydı her geçişte biri
+kayardı. Konum anahtarları `$YERLESIMLER` tablosundaki ön ekten türetilir, yani
+yeni bir yerleşim eklemek tabloya bir satır eklemek demektir.
+
+## Renk paletleri
+
+Sağ tık → **Renkler**: Widget (varsayılan), Catppuccin Mocha, Dracula, Nord,
+Gruvbox Dark. Palet; zemini, yazıyı, bar rayını ve üç doluluk rengini
+(düşük / orta / yüksek) birlikte değiştirir. Bayat veri rengi ve 7 gün grafiği
+de paletten beslenir.
+
+![Renk temaları](docs/themes.png)
+
+Renkler XAML'de `DynamicResource` olarak bağlıdır — tema **yeniden başlatmadan**
+değişir. "Arka plan" menüsü artık rengi değil **saydamlığı** seçer (alfa); renk
+paletten gelir. İkisi çakışmasın diye ayrıldı.
+
+Palet değerleri yaygın açık kaynak renk şemalarından alınmıştır
+([Catppuccin](https://github.com/catppuccin/catppuccin),
+[Dracula](https://github.com/dracula/dracula-theme),
+[Nord](https://github.com/nordtheme/nord),
+[Gruvbox](https://github.com/morhetz/gruvbox)) — yalnızca renkler, kod değil.
 
 ![Şerit teması](docs/strip.png)
 

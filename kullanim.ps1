@@ -49,7 +49,36 @@ Add-Type -Namespace Widget -Name Win32K -MemberDefinition @'
 
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
+
+    // Betigi calistiran konsol. Bkz. Hide-Konsol.
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+
+    [DllImport("kernel32.dll")]
+    public static extern bool FreeConsole();
 '@
+
+# Arkada duran boş konsol penceresini yok et.
+#
+# Kısayol `-WindowStyle Hidden` ile açıyor ama bu YETMİYOR: kullanıcının
+# varsayılan konsol barındırıcısı Windows Terminal ise pencere sınıfı
+# `CASCADIA_HOSTING_WINDOW_CLASS` oluyor, yani PowerShell'in gizlemeye
+# çalıştığı pencere gerçek sahibi değil — ekranda "Claude Kullanım" başlıklı
+# boş bir terminal açık kalıyor. Aynısı betik çift tıkla ya da çıktı
+# yönlendirmeli başlatıldığında da oluyor.
+#
+# İki adım birden: klasik conhost için pencereyi gizle, Windows Terminal için
+# konsolu tamamen bırak. Widget'ın penceresi WPF; konsola hiç ihtiyacı yok ve
+# mesaj döngüsü konsoldan bağımsız çalışmaya devam ediyor.
+function Hide-Konsol {
+    try {
+        $konsol = [Widget.Win32]::GetConsoleWindow()
+        if ($konsol -eq [IntPtr]::Zero) { return }          # zaten konsolsuz
+        [void][Widget.Win32]::ShowWindow($konsol, 0)        # SW_HIDE
+        [void][Widget.Win32]::FreeConsole()
+    } catch { }
+}
+Hide-Konsol
 
 # Pencereyi z-sırasının dibinde tutmanın DOĞRU yolu.
 #
@@ -140,7 +169,39 @@ $BAYAT_SN    = 300      # 5 dk'dan eski veri "bayat" sayılır
 $MASAUSTU_BAYAT_SN = 1200   # masaüstü 15 dk'da bir örnekler (+5 dk pay); ötesi bayat
 $MASAUSTU_HIZ_DK   = 60     # tüketim hızı için geriye bakış (15 dk'lık örneklerle 45 dk çok dar)
 
-$ArkaPlanlar = @{ yok = '#00000000'; hafif = '#59000000'; koyu = '#A6000000' }
+# Arka plan artık ALFA seçiyor; rengi tema veriyor. İkisi çarpışmasın diye
+# ayrıldı: "koyu/hafif/yok" saydamlık tercihidir, tema ise palet.
+$ArkaPlanlar = @{ yok = '00'; hafif = '59'; koyu = 'A6' }
+
+# Renk temaları. Varsayılan dışındakiler yaygın açık kaynak paletlerden
+# (Catppuccin Mocha, Dracula, Nord, Gruvbox Dark) — kod değil, yalnızca
+# renk değerleri; her biri kendi projesinin MIT benzeri lisansı altında.
+#
+# Alanlar:
+#   Zemin  kapsül rengi (alfa ArkaPlanlar'dan gelir)
+#   Metin / Solgun   ana ve ikincil yazı
+#   Ray    bar oluğu
+#   Dusuk / Orta / Yuksek   bar dolgusu, %75 ve %90 eşiklerine göre
+#   Bayat  veri eskiyince barın döndüğü renk
+#   Sonuk  7 gün grafiğinde bugün olmayan çubuklar
+$RENKLER = [ordered]@{
+    varsayilan       = @{ Ad = 'Varsayilan';            Zemin = '000000'; Metin = '#F0F4FA'; Solgun = '#E8EDF5'
+                     Ray = '#26FFFFFF'; Dusuk = '#4C8DF6'; Orta = '#E8A33D'; Yuksek = '#E5484D'
+                     Bayat = '#5A6472'; Sonuk = '#3D5E8C' }
+    catppuccin  = @{ Ad = 'Catppuccin Mocha'; Zemin = '1E1E2E'; Metin = '#CDD6F4'; Solgun = '#BAC2DE'
+                     Ray = '#26FFFFFF'; Dusuk = '#89B4FA'; Orta = '#F9E2AF'; Yuksek = '#F38BA8'
+                     Bayat = '#6C7086'; Sonuk = '#45475A' }
+    dracula     = @{ Ad = 'Dracula';          Zemin = '282A36'; Metin = '#F8F8F2'; Solgun = '#D8D8D2'
+                     Ray = '#26FFFFFF'; Dusuk = '#BD93F9'; Orta = '#F1FA8C'; Yuksek = '#FF5555'
+                     Bayat = '#6272A4'; Sonuk = '#44475A' }
+    nord        = @{ Ad = 'Nord';             Zemin = '2E3440'; Metin = '#ECEFF4'; Solgun = '#D8DEE9'
+                     Ray = '#26FFFFFF'; Dusuk = '#88C0D0'; Orta = '#EBCB8B'; Yuksek = '#BF616A'
+                     Bayat = '#616E88'; Sonuk = '#4C566A' }
+    gruvbox     = @{ Ad = 'Gruvbox Dark';     Zemin = '282828'; Metin = '#EBDBB2'; Solgun = '#D5C4A1'
+                     Ray = '#26FFFFFF'; Dusuk = '#83A598'; Orta = '#FABD2F'; Yuksek = '#FB4934'
+                     Bayat = '#7C6F64'; Sonuk = '#504945' }
+}
+$script:Renk = $RENKLER['varsayilan']
 
 function Get-Ayarlar {
     # esik5 / esikH : uyarı eşiği yüzdesi, 0 = kapalı
@@ -151,12 +212,16 @@ function Get-Ayarlar {
     #   anlamlı sınır takvim değil, kotanın sıfırlanma anıdır.
     $v = [ordered]@{ sol = $null; ust = $null; arkaPlan = 'hafif'
                      esik5 = 0; esikH = 0; atesli5 = $null; atesliH = $null
-                     tema = 'kart'; seritSol = $null; seritUst = $null }
+                     tema = 'kart'; renk = 'varsayilan'
+                     seritSol = $null; seritUst = $null
+                     kompaktSol = $null; kompaktUst = $null
+                     terminalSol = $null; terminalUst = $null }
     if (Test-Path $AyarDosya) {
         try {
             $j = Get-Content $AyarDosya -Raw -Encoding UTF8 | ConvertFrom-Json
             foreach ($k in @('sol', 'ust', 'arkaPlan', 'esik5', 'esikH', 'atesli5', 'atesliH',
-                             'tema', 'seritSol', 'seritUst')) {
+                             'tema', 'renk', 'seritSol', 'seritUst',
+                             'kompaktSol', 'kompaktUst', 'terminalSol', 'terminalUst')) {
                 if ($j.PSObject.Properties.Name -contains $k -and $null -ne $j.$k) { $v[$k] = $j.$k }
             }
         } catch { }
@@ -202,11 +267,11 @@ function Get-BarRengi {
 
     if ($null -ne $BitisDk -and $null -ne $Sifirlanma) {
         $kalanDk = ($Sifirlanma - [DateTime]::Now).TotalMinutes
-        if ($kalanDk -gt 0 -and [double]$BitisDk -lt $kalanDk) { return '#E5484D' }
+        if ($kalanDk -gt 0 -and [double]$BitisDk -lt $kalanDk) { return $script:Renk.Yuksek }
     }
-    if ($Yuzde -ge 90) { return '#E5484D' }   # kırmızı
-    if ($Yuzde -ge 75) { return '#E8A33D' }   # amber
-    return '#4C8DF6'                          # mavi
+    if ($Yuzde -ge 90) { return $script:Renk.Yuksek }
+    if ($Yuzde -ge 75) { return $script:Renk.Orta }
+    return $script:Renk.Dusuk
 }
 
 function Format-Sure {
@@ -237,7 +302,8 @@ $METINLER = @{
         MENU_ARKAPLAN='Arka plan'; MENU_YOK='Yok (tam şeffaf)'; MENU_HAFIF='Hafif'; MENU_KOYU='Koyu'
         MENU_ESIK='Uyarı eşiği'; MENU_5SAAT='5 saatlik limit'; MENU_HAFTA='Haftalık'
         MENU_SIFIRLA='Konumu sıfırla (sağ üst)'; MENU_KAPAT='Kapat'; MENU_KAPALI='Kapalı'
-        MENU_TEMA='Görünüm'; TEMA_KART='Kart'; TEMA_SERIT='Şerit (alt bar)'
+        MENU_TEMA='Görünüm'; TEMA_KART='Kart'; TEMA_SERIT='Şerit (alt bar)'; MENU_RENK='Renkler'
+        TEMA_KOMPAKT='Kompakt'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
         SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'; KAYNAK_MASAUSTU='masaüstü'
@@ -259,7 +325,8 @@ $METINLER = @{
         MENU_ARKAPLAN='Background'; MENU_YOK='None (transparent)'; MENU_HAFIF='Light'; MENU_KOYU='Dark'
         MENU_ESIK='Alert threshold'; MENU_5SAAT='5-hour limit'; MENU_HAFTA='Weekly'
         MENU_SIFIRLA='Reset position (top right)'; MENU_KAPAT='Close'; MENU_KAPALI='Off'
-        MENU_TEMA='Appearance'; TEMA_KART='Card'; TEMA_SERIT='Strip (taskbar)'
+        MENU_TEMA='Appearance'; TEMA_KART='Card'; TEMA_SERIT='Strip (taskbar)'; MENU_RENK='Colours'
+        TEMA_KOMPAKT='Compact'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5h'; SERIT_HAFTA='week'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
         SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'; KAYNAK_MASAUSTU='desktop'
@@ -293,6 +360,17 @@ $xamlMetin = @'
         SizeToContent="WidthAndHeight" WindowStartupLocation="Manual"
         UseLayoutRounding="True" TextOptions.TextRenderingMode="ClearType">
 
+  <Window.Resources>
+    <!-- Renkler DynamicResource: tema menüden değişince pencere yeniden
+         kurulmadan güncellenir. Değerler Set-Renkler tarafından yazılır. -->
+    <SolidColorBrush x:Key="RMetin"  Color="#F0F4FA"/>
+    <SolidColorBrush x:Key="RSolgun" Color="#E8EDF5"/>
+    <SolidColorBrush x:Key="RRay"    Color="#26FFFFFF"/>
+    <SolidColorBrush x:Key="RDusuk"  Color="#4C8DF6"/>
+    <SolidColorBrush x:Key="ROrta"   Color="#E8A33D"/>
+    <SolidColorBrush x:Key="RYuksek" Color="#E5484D"/>
+  </Window.Resources>
+
   <Window.ContextMenu>
     <ContextMenu>
       <MenuItem Header="@@MENU_ARKAPLAN@@">
@@ -300,9 +378,12 @@ $xamlMetin = @'
         <MenuItem x:Name="MnuBgHafif" Header="@@MENU_HAFIF@@"            IsCheckable="True"/>
         <MenuItem x:Name="MnuBgKoyu"  Header="@@MENU_KOYU@@"             IsCheckable="True"/>
       </MenuItem>
+      <MenuItem x:Name="MnuRenk" Header="@@MENU_RENK@@"/>
       <MenuItem Header="@@MENU_TEMA@@">
         <MenuItem x:Name="MnuTemaKart"  Header="@@TEMA_KART@@"  IsCheckable="True"/>
         <MenuItem x:Name="MnuTemaSerit" Header="@@TEMA_SERIT@@" IsCheckable="True"/>
+        <MenuItem x:Name="MnuTemaKompakt" Header="@@TEMA_KOMPAKT@@" IsCheckable="True"/>
+        <MenuItem x:Name="MnuTemaTerminal" Header="@@TEMA_TERMINAL@@" IsCheckable="True"/>
       </MenuItem>
       <MenuItem Header="@@MENU_ESIK@@">
         <MenuItem x:Name="MnuEsik5" Header="@@MENU_5SAAT@@"/>
@@ -319,7 +400,7 @@ $xamlMetin = @'
        5 saatlik ve haftalık ALT ALTA: yan yana dizilim 48 px'lik çubukta hem
        uzun hem de tek bakışta okunmuyordu. -->
   <Border x:Name="SeritKapsul" Visibility="Collapsed" CornerRadius="7" Padding="10,3,12,4"
-          Background="#D91C1F26" BorderBrush="#26FFFFFF" BorderThickness="1">
+          BorderBrush="{DynamicResource RRay}" BorderThickness="1">
     <Grid VerticalAlignment="Center">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="Auto"/>
@@ -334,32 +415,77 @@ $xamlMetin = @'
       </Grid.RowDefinitions>
 
       <TextBlock Grid.RowSpan="2" Text="CLAUDE" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
-                 Foreground="#E8EDF5" Opacity="0.5" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                 Foreground="{DynamicResource RSolgun}" Opacity="0.5" VerticalAlignment="Center" Margin="0,0,10,0"/>
 
       <!-- 1. satır: 5 saat -->
       <TextBlock Grid.Row="0" Grid.Column="1" Text="@@SERIT_5SA@@" FontFamily="Segoe UI" FontSize="9.5"
-                 Foreground="#E8EDF5" Opacity="0.55" VerticalAlignment="Center" TextAlignment="Right" Margin="0,0,6,0"/>
-      <Border Grid.Row="0" Grid.Column="2" Width="70" Height="4" CornerRadius="2" Background="#26FFFFFF" VerticalAlignment="Center">
-        <Border x:Name="Serit5Dolgu" Width="0" CornerRadius="2" HorizontalAlignment="Left" Background="#4C8DF6"/>
+                 Foreground="{DynamicResource RSolgun}" Opacity="0.55" VerticalAlignment="Center" TextAlignment="Right" Margin="0,0,6,0"/>
+      <Border Grid.Row="0" Grid.Column="2" Width="70" Height="4" CornerRadius="2" Background="{DynamicResource RRay}" VerticalAlignment="Center">
+        <Border x:Name="Serit5Dolgu" Width="0" CornerRadius="2" HorizontalAlignment="Left" Background="{DynamicResource RDusuk}"/>
       </Border>
       <TextBlock Grid.Row="0" Grid.Column="3" x:Name="Serit5Yuzde" FontFamily="Segoe UI" FontSize="10.5" FontWeight="SemiBold"
-                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="32" TextAlignment="Right" Margin="6,0,0,0"
+                 Foreground="{DynamicResource RMetin}" VerticalAlignment="Center" MinWidth="32" TextAlignment="Right" Margin="6,0,0,0"
                  Typography.NumeralAlignment="Tabular"/>
       <TextBlock Grid.Row="0" Grid.Column="4" x:Name="SeritKalan" FontFamily="Segoe UI" FontSize="9.5"
-                 Foreground="#E8EDF5" Opacity="0.55" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                 Foreground="{DynamicResource RSolgun}" Opacity="0.55" VerticalAlignment="Center" Margin="10,0,0,0"/>
 
       <!-- 2. satır: hafta -->
       <TextBlock Grid.Row="1" Grid.Column="1" Text="@@SERIT_HAFTA@@" FontFamily="Segoe UI" FontSize="9.5"
-                 Foreground="#E8EDF5" Opacity="0.55" VerticalAlignment="Center" TextAlignment="Right" Margin="0,1,6,0"/>
-      <Border Grid.Row="1" Grid.Column="2" Width="70" Height="4" CornerRadius="2" Background="#26FFFFFF" VerticalAlignment="Center" Margin="0,1,0,0">
-        <Border x:Name="SeritHDolgu" Width="0" CornerRadius="2" HorizontalAlignment="Left" Background="#4C8DF6"/>
+                 Foreground="{DynamicResource RSolgun}" Opacity="0.55" VerticalAlignment="Center" TextAlignment="Right" Margin="0,1,6,0"/>
+      <Border Grid.Row="1" Grid.Column="2" Width="70" Height="4" CornerRadius="2" Background="{DynamicResource RRay}" VerticalAlignment="Center" Margin="0,1,0,0">
+        <Border x:Name="SeritHDolgu" Width="0" CornerRadius="2" HorizontalAlignment="Left" Background="{DynamicResource RDusuk}"/>
       </Border>
       <TextBlock Grid.Row="1" Grid.Column="3" x:Name="SeritHYuzde" FontFamily="Segoe UI" FontSize="10.5" FontWeight="SemiBold"
-                 Foreground="#F0F4FA" VerticalAlignment="Center" MinWidth="32" TextAlignment="Right" Margin="6,1,0,0"
+                 Foreground="{DynamicResource RMetin}" VerticalAlignment="Center" MinWidth="32" TextAlignment="Right" Margin="6,1,0,0"
                  Typography.NumeralAlignment="Tabular"/>
-      <TextBlock Grid.Row="1" Grid.Column="4" x:Name="SeritYas" FontFamily="Segoe UI" FontSize="9" Foreground="#E8A33D"
+      <TextBlock Grid.Row="1" Grid.Column="4" x:Name="SeritYas" FontFamily="Segoe UI" FontSize="9" Foreground="{DynamicResource ROrta}"
                  VerticalAlignment="Center" Margin="10,1,0,0"/>
     </Grid>
+  </Border>
+
+  <!-- KOMPAKT: yalnızca iki yüzde. Ekranda yer kaplamasın, göz ucuyla
+       bakılsın diye; bar yok, sayı büyük. -->
+  <Border x:Name="KompaktKapsul" Visibility="Collapsed" CornerRadius="10" Padding="12,8,12,9"
+          BorderBrush="{DynamicResource RRay}" BorderThickness="1">
+    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+      <StackPanel Margin="0,0,14,0">
+        <TextBlock Text="@@SERIT_5SA@@" FontFamily="Segoe UI" FontSize="9"
+                   Foreground="{DynamicResource RSolgun}" Opacity="0.5" TextAlignment="Center"/>
+        <TextBlock x:Name="Kompakt5" FontFamily="Segoe UI" FontSize="20" FontWeight="SemiBold"
+                   Foreground="{DynamicResource RMetin}" TextAlignment="Center"
+                   Typography.NumeralAlignment="Tabular" Margin="0,-2,0,0"/>
+        <Border Width="46" Height="3" CornerRadius="1.5" Background="{DynamicResource RRay}" HorizontalAlignment="Center">
+          <Border x:Name="Kompakt5Dolgu" Width="0" CornerRadius="1.5" HorizontalAlignment="Left" Background="{DynamicResource RDusuk}"/>
+        </Border>
+      </StackPanel>
+      <StackPanel>
+        <TextBlock Text="@@SERIT_HAFTA@@" FontFamily="Segoe UI" FontSize="9"
+                   Foreground="{DynamicResource RSolgun}" Opacity="0.5" TextAlignment="Center"/>
+        <TextBlock x:Name="KompaktH" FontFamily="Segoe UI" FontSize="20" FontWeight="SemiBold"
+                   Foreground="{DynamicResource RMetin}" TextAlignment="Center"
+                   Typography.NumeralAlignment="Tabular" Margin="0,-2,0,0"/>
+        <Border Width="46" Height="3" CornerRadius="1.5" Background="{DynamicResource RRay}" HorizontalAlignment="Center">
+          <Border x:Name="KompaktHDolgu" Width="0" CornerRadius="1.5" HorizontalAlignment="Left" Background="{DynamicResource RDusuk}"/>
+        </Border>
+      </StackPanel>
+    </StackPanel>
+  </Border>
+
+  <!-- TERMINAL: tek aralıklı yazı tipi ve karakterden barlar. Kod yazarken
+       ekranın geri kalanına karışmayan, "üçüncü bir terminal penceresi" gibi
+       duran görünüm. Barlar Update-Terminal'de iki Run ile boyanıyor. -->
+  <Border x:Name="TerminalKapsul" Visibility="Collapsed" CornerRadius="6" Padding="12,9,12,10"
+          BorderBrush="{DynamicResource RRay}" BorderThickness="1">
+    <StackPanel>
+      <TextBlock FontFamily="Consolas,Cascadia Mono,Courier New" FontSize="10"
+                 Foreground="{DynamicResource RSolgun}" Opacity="0.5" Text="claude ~ limits" Margin="0,0,0,4"/>
+      <TextBlock x:Name="Terminal5" FontFamily="Consolas,Cascadia Mono,Courier New" FontSize="11.5"
+                 Foreground="{DynamicResource RMetin}"/>
+      <TextBlock x:Name="TerminalH" FontFamily="Consolas,Cascadia Mono,Courier New" FontSize="11.5"
+                 Foreground="{DynamicResource RMetin}" Margin="0,2,0,0"/>
+      <TextBlock x:Name="TerminalAlt" FontFamily="Consolas,Cascadia Mono,Courier New" FontSize="9.5"
+                 Foreground="{DynamicResource RSolgun}" Opacity="0.45" Margin="0,4,0,0"/>
+    </StackPanel>
   </Border>
 
   <Border x:Name="Kapsul" CornerRadius="16" Padding="18,13,18,15" Background="#59000000">
@@ -371,9 +497,9 @@ $xamlMetin = @'
       <!-- baslik -->
       <Grid Margin="0,0,0,10">
         <TextBlock Text="@@BASLIK@@" FontFamily="Segoe UI" FontSize="9.5"
-                   FontWeight="SemiBold" Foreground="#E8EDF5" Opacity="0.55"/>
+                   FontWeight="SemiBold" Foreground="{DynamicResource RSolgun}" Opacity="0.55"/>
         <TextBlock x:Name="Yas" HorizontalAlignment="Right" FontFamily="Segoe UI"
-                   FontSize="9.5" Foreground="#E8EDF5" Opacity="0.45"/>
+                   FontSize="9.5" Foreground="{DynamicResource RSolgun}" Opacity="0.45"/>
       </Grid>
 
       <!-- 5 saatlik limit -->
@@ -384,15 +510,15 @@ $xamlMetin = @'
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <TextBlock Grid.Column="0" Text="@@ETIKET_5SAAT@@" FontFamily="Segoe UI" FontSize="11.5"
-                   Foreground="#F0F4FA"/>
+                   Foreground="{DynamicResource RMetin}"/>
         <TextBlock x:Name="Sifir5" Grid.Column="1" FontFamily="Segoe UI" FontSize="10.5"
-                   Foreground="#E8EDF5" Opacity="0.5" TextAlignment="Right" Margin="10,1,10,0"/>
+                   Foreground="{DynamicResource RSolgun}" Opacity="0.5" TextAlignment="Right" Margin="10,1,10,0"/>
         <TextBlock x:Name="Yuzde5" Grid.Column="2" FontFamily="Segoe UI" FontSize="11.5"
-                   FontWeight="SemiBold" Foreground="#F0F4FA" TextAlignment="Right" MinWidth="34"
+                   FontWeight="SemiBold" Foreground="{DynamicResource RMetin}" TextAlignment="Right" MinWidth="34"
                    Typography.NumeralAlignment="Tabular"/>
       </Grid>
-      <Border Width="232" Height="5" CornerRadius="2.5" Background="#26FFFFFF" HorizontalAlignment="Left">
-        <Border x:Name="Dolgu5" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      <Border Width="232" Height="5" CornerRadius="2.5" Background="{DynamicResource RRay}" HorizontalAlignment="Left">
+        <Border x:Name="Dolgu5" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="{DynamicResource RDusuk}"/>
       </Border>
 
       <!-- haftalik limit -->
@@ -403,28 +529,28 @@ $xamlMetin = @'
           <ColumnDefinition Width="Auto"/>
         </Grid.ColumnDefinitions>
         <TextBlock Grid.Column="0" Text="@@ETIKET_HAFTA@@" FontFamily="Segoe UI" FontSize="11.5"
-                   Foreground="#F0F4FA"/>
+                   Foreground="{DynamicResource RMetin}"/>
         <TextBlock x:Name="SifirH" Grid.Column="1" FontFamily="Segoe UI" FontSize="10.5"
-                   Foreground="#E8EDF5" Opacity="0.5" TextAlignment="Right" Margin="10,1,10,0"/>
+                   Foreground="{DynamicResource RSolgun}" Opacity="0.5" TextAlignment="Right" Margin="10,1,10,0"/>
         <TextBlock x:Name="YuzdeH" Grid.Column="2" FontFamily="Segoe UI" FontSize="11.5"
-                   FontWeight="SemiBold" Foreground="#F0F4FA" TextAlignment="Right" MinWidth="34"
+                   FontWeight="SemiBold" Foreground="{DynamicResource RMetin}" TextAlignment="Right" MinWidth="34"
                    Typography.NumeralAlignment="Tabular"/>
       </Grid>
-      <Border Width="232" Height="5" CornerRadius="2.5" Background="#26FFFFFF" HorizontalAlignment="Left">
-        <Border x:Name="DolguH" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="#4C8DF6"/>
+      <Border Width="232" Height="5" CornerRadius="2.5" Background="{DynamicResource RRay}" HorizontalAlignment="Left">
+        <Border x:Name="DolguH" Width="0" CornerRadius="2.5" HorizontalAlignment="Left" Background="{DynamicResource RDusuk}"/>
       </Border>
 
       <!-- tuketim hizi uyarisi -->
-      <TextBlock x:Name="HizUyari" FontFamily="Segoe UI" FontSize="10" Foreground="#E5484D"
+      <TextBlock x:Name="HizUyari" FontFamily="Segoe UI" FontSize="10" Foreground="{DynamicResource RYuksek}"
                  Margin="0,9,0,0" Visibility="Collapsed" TextWrapping="Wrap" MaxWidth="232"/>
 
       <!-- son 7 gun -->
       <StackPanel x:Name="HaftaBolum" Margin="0,14,0,0" Visibility="Collapsed">
         <Grid>
           <TextBlock Text="@@SON7@@" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
-                     Foreground="#E8EDF5" Opacity="0.45"/>
+                     Foreground="{DynamicResource RSolgun}" Opacity="0.45"/>
           <TextBlock x:Name="BugunOzet" HorizontalAlignment="Right" FontFamily="Segoe UI"
-                     FontSize="9" Foreground="#E8EDF5" Opacity="0.45"/>
+                     FontSize="9" Foreground="{DynamicResource RSolgun}" Opacity="0.45"/>
         </Grid>
         <Grid Margin="0,6,0,0" Width="232" HorizontalAlignment="Left">
           <Grid.ColumnDefinitions>
@@ -434,38 +560,38 @@ $xamlMetin = @'
           </Grid.ColumnDefinitions>
           <Grid Grid.Column="0">
             <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border x:Name="Cub0" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
-            <TextBlock x:Name="Etk0" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+            <Border x:Name="Cub0" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="{DynamicResource RDusuk}"/>
+            <TextBlock x:Name="Etk0" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="{DynamicResource RSolgun}" Opacity="0.4" Margin="0,3,0,0"/>
           </Grid>
           <Grid Grid.Column="1">
             <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border x:Name="Cub1" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
-            <TextBlock x:Name="Etk1" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+            <Border x:Name="Cub1" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="{DynamicResource RDusuk}"/>
+            <TextBlock x:Name="Etk1" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="{DynamicResource RSolgun}" Opacity="0.4" Margin="0,3,0,0"/>
           </Grid>
           <Grid Grid.Column="2">
             <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border x:Name="Cub2" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
-            <TextBlock x:Name="Etk2" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+            <Border x:Name="Cub2" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="{DynamicResource RDusuk}"/>
+            <TextBlock x:Name="Etk2" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="{DynamicResource RSolgun}" Opacity="0.4" Margin="0,3,0,0"/>
           </Grid>
           <Grid Grid.Column="3">
             <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border x:Name="Cub3" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
-            <TextBlock x:Name="Etk3" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+            <Border x:Name="Cub3" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="{DynamicResource RDusuk}"/>
+            <TextBlock x:Name="Etk3" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="{DynamicResource RSolgun}" Opacity="0.4" Margin="0,3,0,0"/>
           </Grid>
           <Grid Grid.Column="4">
             <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border x:Name="Cub4" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
-            <TextBlock x:Name="Etk4" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+            <Border x:Name="Cub4" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="{DynamicResource RDusuk}"/>
+            <TextBlock x:Name="Etk4" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="{DynamicResource RSolgun}" Opacity="0.4" Margin="0,3,0,0"/>
           </Grid>
           <Grid Grid.Column="5">
             <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border x:Name="Cub5" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
-            <TextBlock x:Name="Etk5" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+            <Border x:Name="Cub5" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="{DynamicResource RDusuk}"/>
+            <TextBlock x:Name="Etk5" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="{DynamicResource RSolgun}" Opacity="0.4" Margin="0,3,0,0"/>
           </Grid>
           <Grid Grid.Column="6">
             <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border x:Name="Cub6" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="#4C8DF6"/>
-            <TextBlock x:Name="Etk6" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="#E8EDF5" Opacity="0.4" Margin="0,3,0,0"/>
+            <Border x:Name="Cub6" Grid.Row="0" VerticalAlignment="Bottom" Height="2" Margin="4,0,4,0" CornerRadius="1.5" Background="{DynamicResource RDusuk}"/>
+            <TextBlock x:Name="Etk6" Grid.Row="1" FontFamily="Segoe UI" FontSize="8.5" TextAlignment="Center" Foreground="{DynamicResource RSolgun}" Opacity="0.4" Margin="0,3,0,0"/>
           </Grid>
         </Grid>
       </StackPanel>
@@ -487,7 +613,7 @@ $xamlMetin = @'
       </Border>
 
       <!-- veri yoksa -->
-      <TextBlock x:Name="Uyari" FontFamily="Segoe UI" FontSize="10.5" Foreground="#E8A33D"
+      <TextBlock x:Name="Uyari" FontFamily="Segoe UI" FontSize="10.5" Foreground="{DynamicResource ROrta}"
                  Opacity="0.85" Margin="0,11,0,0" Visibility="Collapsed" TextWrapping="Wrap"
                  MaxWidth="232"/>
     </StackPanel>
@@ -524,6 +650,14 @@ $SeritKapsul = Get-Ogesi 'SeritKapsul'
 $Serit5Dolgu = Get-Ogesi 'Serit5Dolgu'; $Serit5Yuzde = Get-Ogesi 'Serit5Yuzde'
 $SeritHDolgu = Get-Ogesi 'SeritHDolgu'; $SeritHYuzde = Get-Ogesi 'SeritHYuzde'
 $SeritKalan  = Get-Ogesi 'SeritKalan';  $SeritYas    = Get-Ogesi 'SeritYas'
+$KompaktKapsul = Get-Ogesi 'KompaktKapsul'
+$Kompakt5 = Get-Ogesi 'Kompakt5'; $Kompakt5Dolgu = Get-Ogesi 'Kompakt5Dolgu'
+$KompaktH = Get-Ogesi 'KompaktH'; $KompaktHDolgu = Get-Ogesi 'KompaktHDolgu'
+$TerminalKapsul = Get-Ogesi 'TerminalKapsul'
+$Terminal5 = Get-Ogesi 'Terminal5'; $TerminalH = Get-Ogesi 'TerminalH'
+$TerminalAlt = Get-Ogesi 'TerminalAlt'
+$KOMPAKT_IZ = 46.0  # kompakt mini bar rayı (XAML ile aynı)
+$TERMINAL_HANE = 14 # terminal barındaki karakter sayısı
 $SERIT_IZ = 70.0    # şeritteki mini bar rayının genişliği (XAML ile aynı)
 $SERIT_TEPSI_PAYI = 250.0   # sağdaki saat/bildirim alanını örtmemek için pay
 $HaftaBolum = Get-Ogesi 'HaftaBolum'; $BugunOzet = Get-Ogesi 'BugunOzet'
@@ -541,11 +675,43 @@ $script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
 
 
+function ConvertTo-Fircasi { param([string]$Renk) [Windows.Media.BrushConverter]::new().ConvertFromString($Renk) }
+
+# Renk teması. Kaynak sözlüğüne yazdığı için XAML'deki her DynamicResource
+# kendiliğinden güncellenir; koddan boyanan yerler (barlar, hafta çubukları)
+# bir sonraki Update-Gorunum turunda zaten yeniden renklenir.
+function Set-Renkler {
+    param([string]$Ad, [switch]$Kaydetme)
+
+    if (-not $RENKLER.Contains($Ad)) { $Ad = 'varsayilan' }
+    $script:Ayar.renk = $Ad
+    $script:Renk = $RENKLER[$Ad]
+
+    foreach ($es in @(@('RMetin', 'Metin'), @('RSolgun', 'Solgun'), @('RRay', 'Ray'),
+                      @('RDusuk', 'Dusuk'), @('ROrta', 'Orta'), @('RYuksek', 'Yuksek'))) {
+        $win.Resources[$es[0]] = ConvertTo-Fircasi $script:Renk[$es[1]]
+    }
+
+    Set-ArkaPlan $script:Ayar.arkaPlan       # zemin rengi temadan geliyor
+    foreach ($oge in (Get-Ogesi 'MnuRenk').Items) { $oge.IsChecked = ([string]$oge.Tag -eq $Ad) }
+    if (-not $Kaydetme) { Save-Ayarlar -Ayar $script:Ayar }
+    Update-Gorunum
+}
+
 function Set-ArkaPlan {
     param([string]$Ad)
     if (-not $ArkaPlanlar.ContainsKey($Ad)) { $Ad = 'hafif' }
     $script:Ayar.arkaPlan = $Ad
-    $Kapsul.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($ArkaPlanlar[$Ad])
+    # Alfa seçimden, RGB temadan: '#59' + '1E1E2E'
+    $Kapsul.Background = ConvertTo-Fircasi ('#{0}{1}' -f $ArkaPlanlar[$Ad], $script:Renk.Zemin)
+    # Şerit her zaman okunur kalmalı — görev çubuğunun üstünde saydam bir
+    # şerit zemine karışıyor; onun alfası sabit tutuluyor.
+    # Şerit/kompakt/terminal görev çubuğu ya da pencere üstünde durabiliyor;
+    # okunurluk için zeminleri saydamlık seçiminden bağımsız, sabit koyu.
+    $koyuZemin = ConvertTo-Fircasi ('#D9{0}' -f $script:Renk.Zemin)
+    $SeritKapsul.Background    = $koyuZemin
+    $KompaktKapsul.Background  = $koyuZemin
+    $TerminalKapsul.Background = $koyuZemin
     (Get-Ogesi 'MnuBgYok').IsChecked   = ($Ad -eq 'yok')
     (Get-Ogesi 'MnuBgHafif').IsChecked = ($Ad -eq 'hafif')
     (Get-Ogesi 'MnuBgKoyu').IsChecked  = ($Ad -eq 'koyu')
@@ -558,21 +724,32 @@ function Set-ArkaPlan {
 # "hep dipte" kancasını kapatıp Topmost'a geçiyoruz. Kart teması eskisi gibi
 # masaüstü seviyesinde durur ve hiçbir pencerenin önüne geçmez.
 # ─────────────────────────────────────────────────────────────────────────────
+# Yerleşimler ve pencere davranışları.
+#   Dipte : masaüstü seviyesinde mi dursun (kart gibi) yoksa üstte mi (şerit)
+#   Anahtar : ayar dosyasındaki konum anahtarlarının ön eki
+$YERLESIMLER = [ordered]@{
+    kart     = @{ Menu = 'MnuTemaKart';     Dipte = $true;  Onek = ''         }
+    serit    = @{ Menu = 'MnuTemaSerit';    Dipte = $false; Onek = 'serit'    }
+    kompakt  = @{ Menu = 'MnuTemaKompakt';  Dipte = $true;  Onek = 'kompakt'  }
+    terminal = @{ Menu = 'MnuTemaTerminal'; Dipte = $true;  Onek = 'terminal' }
+}
+
 function Set-Tema {
     param([string]$Ad, [switch]$Kaydetme)
 
-    if ($Ad -ne 'serit') { $Ad = 'kart' }
+    if (-not $YERLESIMLER.Contains($Ad)) { $Ad = 'kart' }
     $script:Ayar.tema = $Ad
-    $seritMi = ($Ad -eq 'serit')
+    $y = $YERLESIMLER[$Ad]
 
-    $SeritKapsul.Visibility = $(if ($seritMi) { 'Visible' } else { 'Collapsed' })
-    $Kapsul.Visibility      = $(if ($seritMi) { 'Collapsed' } else { 'Visible' })
+    $Kapsul.Visibility         = $(if ($Ad -eq 'kart')     { 'Visible' } else { 'Collapsed' })
+    $SeritKapsul.Visibility    = $(if ($Ad -eq 'serit')    { 'Visible' } else { 'Collapsed' })
+    $KompaktKapsul.Visibility  = $(if ($Ad -eq 'kompakt')  { 'Visible' } else { 'Collapsed' })
+    $TerminalKapsul.Visibility = $(if ($Ad -eq 'terminal') { 'Visible' } else { 'Collapsed' })
 
-    [ZDuzeni]::Dipte = -not $seritMi
-    $win.Topmost = $seritMi
+    [ZDuzeni]::Dipte = $y.Dipte
+    $win.Topmost = -not $y.Dipte
 
-    (Get-Ogesi 'MnuTemaKart').IsChecked  = -not $seritMi
-    (Get-Ogesi 'MnuTemaSerit').IsChecked = $seritMi
+    foreach ($k in $YERLESIMLER.Keys) { (Get-Ogesi $YERLESIMLER[$k].Menu).IsChecked = ($k -eq $Ad) }
 
     Update-Gorunum      # şerit öğeleri boş doğmasın
     Set-TemaKonumu      # ölçüler oturduktan SONRA konumla
@@ -590,21 +767,24 @@ function Set-TemaKonumu {
         [System.Action]{ Set-TemaKonumuSimdi }) | Out-Null
 }
 
+# Her yerleşim kendi konumunu tutar; ortak tek konum olsaydı her geçişte
+# biri kayardı. Anahtarlar: kart -> sol/ust, diğerleri -> <ön ek>Sol/<ön ek>Ust.
+function Get-KonumAnahtari {
+    $onek = $YERLESIMLER[$script:Ayar.tema].Onek
+    if ($onek -eq '') { return @('sol', 'ust') }
+    return @(($onek + 'Sol'), ($onek + 'Ust'))
+}
+
 function Set-TemaKonumuSimdi {
     $win.UpdateLayout()
+    $a = Get-KonumAnahtari
 
-    if ($script:Ayar.tema -eq 'serit') {
-        if ($null -ne $script:Ayar.seritSol -and $null -ne $script:Ayar.seritUst) {
-            Set-PencereKonumu -Sol ([double]$script:Ayar.seritSol) -Ust ([double]$script:Ayar.seritUst)
-        } else {
-            Set-SeritVarsayilanKonumu
-        }
+    if ($null -ne $script:Ayar.($a[0]) -and $null -ne $script:Ayar.($a[1])) {
+        Set-PencereKonumu -Sol ([double]$script:Ayar.($a[0])) -Ust ([double]$script:Ayar.($a[1]))
+    } elseif ($script:Ayar.tema -eq 'serit') {
+        Set-SeritVarsayilanKonumu
     } else {
-        if ($null -ne $script:Ayar.sol -and $null -ne $script:Ayar.ust) {
-            Set-PencereKonumu -Sol ([double]$script:Ayar.sol) -Ust ([double]$script:Ayar.ust)
-        } else {
-            Set-VarsayilanKonum
-        }
+        Set-VarsayilanKonum
     }
 }
 
@@ -821,7 +1001,7 @@ function Update-Bar {
     $renk = if ($script:VeriTaze) {
         Get-BarRengi -Yuzde $yuzde -Sifirlanma $sifirlanma -BitisDk $BitisDk
     } else {
-        '#5A6472'
+        $script:Renk.Bayat
     }
     $Dolgu.Background = [Windows.Media.BrushConverter]::new().ConvertFromString($renk)
     Write-Tani ("bar: yuzde={0} izGenislik={1} atanan={2} gercek={3} hizalama={4}" -f `
@@ -998,8 +1178,8 @@ function Update-Hafta {
         $ETIKETLER[$i].Text = Get-GunKisa -Gun $tarih.DayOfWeek.ToString()
 
         $buGunMu = ($g.gun -eq $bugun)
-        $CUBUKLAR[$i].Background = [Windows.Media.BrushConverter]::new().ConvertFromString(
-            $(if ($buGunMu) { '#4C8DF6' } else { '#3D5E8C' }))
+        $CUBUKLAR[$i].Background = ConvertTo-Fircasi (
+            $(if ($buGunMu) { $script:Renk.Dusuk } else { $script:Renk.Sonuk }))
         $ETIKETLER[$i].Opacity = $(if ($buGunMu) { 0.85 } else { 0.4 })
     }
 
@@ -1118,7 +1298,7 @@ function Update-Gorunum {
         $Uyari.Text = (T 'VERI_YOK')
         Update-Bar $null $Yuzde5 $Sifir5 $Dolgu5
         Update-Bar $null $YuzdeH $SifirH $DolguH
-        if ($script:Ayar.tema -eq 'serit') { Update-Serit $null }
+        Update-DigerYerlesim $null
         return
     }
 
@@ -1192,16 +1372,113 @@ function Update-Gorunum {
     Test-Esik $script:Veri.five_hour (T 'ESIK_5SAAT') 'esik5' 'atesli5'
     Test-Esik $script:Veri.seven_day (T 'ESIK_HAFTA') 'esikH' 'atesliH'
 
-    if ($script:Ayar.tema -eq 'serit') { Update-Serit $bitisDk }
+    Update-DigerYerlesim $bitisDk
 }
 
 # Kart temasındaki bilgiyi tek satıra sıkıştırır. Renk/bayatlık kuralları
 # kartla AYNI kaynaktan (Get-BarRengi + $script:VeriTaze) gelir; iki tema
 # birbirinden farklı bir gerçeklik göstermesin.
+function Update-DigerYerlesim {
+    param($BitisDk)
+    switch ($script:Ayar.tema) {
+        'serit'    { Update-Serit    $BitisDk }
+        'kompakt'  { Update-Kompakt  $BitisDk }
+        'terminal' { Update-Terminal $BitisDk }
+    }
+}
+
+# Yüzde + renk: üç yerleşim de aynı kurala uyuyor, tek yerden.
+function Get-PencereGorunumu {
+    param($Pencere, $BitisDk)
+    if ($null -eq $Pencere -or $null -eq $Pencere.used_percentage) {
+        return [pscustomobject]@{ Var = $false; Yuzde = 0.0; Renk = $script:Renk.Bayat; Sifirlanma = $null }
+    }
+    $sifirlanma = ConvertFrom-UnixSaniye $Pencere.resets_at
+    $yuzde = [double]$Pencere.used_percentage
+    if ($null -ne $sifirlanma -and $sifirlanma -le [DateTime]::Now) { $yuzde = 0 }
+    $renk = if ($script:VeriTaze) {
+        Get-BarRengi -Yuzde $yuzde -Sifirlanma $sifirlanma -BitisDk $BitisDk
+    } else { $script:Renk.Bayat }
+    return [pscustomobject]@{ Var = $true; Yuzde = $yuzde; Renk = $renk; Sifirlanma = $sifirlanma }
+}
+
+function Set-MiniBar {
+    param($Gorunum, $YuzdeMetin, $Dolgu, [double]$Iz, [switch]$Ok)
+    if (-not $Gorunum.Var) { $YuzdeMetin.Text = '—'; $Dolgu.Width = 0; return }
+    $metin = '{0}%' -f [int][Math]::Round($Gorunum.Yuzde)
+    if ($Ok -and $script:VeriTaze -and $script:KullanimSonrasi) { $metin += ' ▲' }
+    $YuzdeMetin.Text = $metin
+    # [Math]::Min KULLANMA: int aşırı yüklemesi oranı 1'e yuvarlıyor.
+    $oran = $Gorunum.Yuzde / 100.0
+    if ($oran -lt 0.0) { $oran = 0.0 }
+    if ($oran -gt 1.0) { $oran = 1.0 }
+    $Dolgu.Width = $oran * $Iz
+    $Dolgu.Background = ConvertTo-Fircasi $Gorunum.Renk
+}
+
+function Update-Kompakt {
+    param($BitisDk)
+    $bes = Get-PencereGorunumu $(if ($null -ne $script:Veri) { $script:Veri.five_hour } else { $null }) $BitisDk
+    $haf = Get-PencereGorunumu $(if ($null -ne $script:Veri) { $script:Veri.seven_day } else { $null }) $null
+    Set-MiniBar $bes $Kompakt5 $Kompakt5Dolgu $KOMPAKT_IZ
+    Set-MiniBar $haf $KompaktH $KompaktHDolgu $KOMPAKT_IZ
+    $Kompakt5.Foreground = ConvertTo-Fircasi $(if ($bes.Var) { $bes.Renk } else { $script:Renk.Bayat })
+    $KompaktH.Foreground = ConvertTo-Fircasi $(if ($haf.Var) { $haf.Renk } else { $script:Renk.Bayat })
+}
+
+# Karakterden bar: dolu kısım limit rengiyle, kalanı soluk. Tek TextBlock
+# içinde iki Run — iki ayrı TextBlock yan yana koymak tek aralıklı yazıda
+# hizayı bozuyordu.
+function Set-TerminalSatiri {
+    param($Metin, [string]$Etiket, $Gorunum)
+
+    $Metin.Inlines.Clear()
+    $bas = New-Object System.Windows.Documents.Run (('{0,-5}' -f $Etiket) + '[')
+    $bas.Foreground = ConvertTo-Fircasi $script:Renk.Solgun
+    [void]$Metin.Inlines.Add($bas)
+
+    if ($Gorunum.Var) {
+        $oran = $Gorunum.Yuzde / 100.0
+        if ($oran -lt 0.0) { $oran = 0.0 }
+        if ($oran -gt 1.0) { $oran = 1.0 }
+        $dolu = [int][Math]::Round($oran * $TERMINAL_HANE)
+    } else { $dolu = 0 }
+
+    $r1 = New-Object System.Windows.Documents.Run ([string]([char]0x2588) * $dolu)
+    $r1.Foreground = ConvertTo-Fircasi $Gorunum.Renk
+    [void]$Metin.Inlines.Add($r1)
+
+    # Boş kısım da TAM BLOK, yalnızca rengi soluk. Gölge blok (U+2591)
+    # denendi: Consolas onu boşluk gibi çiziyor ve bar yarım görünüyordu.
+    $r2 = New-Object System.Windows.Documents.Run ([string]([char]0x2588) * ($TERMINAL_HANE - $dolu))
+    $r2.Foreground = ConvertTo-Fircasi $script:Renk.Sonuk
+    [void]$Metin.Inlines.Add($r2)
+
+    $kuyrukMetin = if ($Gorunum.Var) { ']{0,5}%' -f [int][Math]::Round($Gorunum.Yuzde) } else { ']    —' }
+    $kuyruk = New-Object System.Windows.Documents.Run $kuyrukMetin
+    $kuyruk.Foreground = ConvertTo-Fircasi $script:Renk.Metin
+    [void]$Metin.Inlines.Add($kuyruk)
+}
+
+function Update-Terminal {
+    param($BitisDk)
+    $bes = Get-PencereGorunumu $(if ($null -ne $script:Veri) { $script:Veri.five_hour } else { $null }) $BitisDk
+    $haf = Get-PencereGorunumu $(if ($null -ne $script:Veri) { $script:Veri.seven_day } else { $null }) $null
+    Set-TerminalSatiri $Terminal5 (T 'SERIT_5SA')   $bes
+    Set-TerminalSatiri $TerminalH (T 'SERIT_HAFTA') $haf
+
+    $parca = @()
+    if ($bes.Var -and $null -ne $bes.Sifirlanma) { $parca += Format-Kalan $bes.Sifirlanma }
+    if ($script:VeriTaze) {
+        if ($script:KullanimSonrasi) { $parca += '+' }
+    } else { $parca += $Yas.Text }
+    $TerminalAlt.Text = ($parca -join '  ·  ')
+}
+
 function Update-Serit {
     param($BitisDk)
 
-    $gri  = '#5A6472'
+    $gri  = $script:Renk.Bayat
     $bes  = if ($null -ne $script:Veri) { $script:Veri.five_hour } else { $null }
     $haf  = if ($null -ne $script:Veri) { $script:Veri.seven_day } else { $null }
 
@@ -1316,13 +1593,9 @@ $win.Add_MouseLeftButtonUp({
     if ($null -ne $script:surukle) {
         $win.ReleaseMouseCapture()
         $script:surukle = $null
-        if ($script:Ayar.tema -eq 'serit') {
-            $script:Ayar.seritSol = $script:KonumSol
-            $script:Ayar.seritUst = $script:KonumUst
-        } else {
-            $script:Ayar.sol = $script:KonumSol
-            $script:Ayar.ust = $script:KonumUst
-        }
+        $a = Get-KonumAnahtari
+        $script:Ayar.($a[0]) = $script:KonumSol
+        $script:Ayar.($a[1]) = $script:KonumUst
         Save-Ayarlar -Ayar $script:Ayar
     }
 })
@@ -1380,25 +1653,38 @@ function Build-EsikMenusu {
     }
 }
 
+# Renk menüsü kodla üretiliyor: tablo tek kaynak, XAML'e beş satır elle
+# yazmak yerine. Tıklama gövdesi script kapsamındaki Set-Renkler'i çağırır —
+# GetNewClosure() kendi modül kapsamını açtığı için $script: değişkenlerine
+# closure içinden yazmak eşik menüsünde çökmeye yol açmıştı.
+function Set-RenkSecimi { param([string]$Ad) Set-Renkler $Ad }
+
+$menuRenk = Get-Ogesi 'MnuRenk'
+foreach ($anahtar in $RENKLER.Keys) {
+    $mi = New-Object System.Windows.Controls.MenuItem
+    $mi.Header = $RENKLER[$anahtar].Ad
+    $mi.Tag = $anahtar
+    $mi.IsCheckable = $true
+    $mi.Add_Click({ param($s, $e) Set-RenkSecimi ([string]$s.Tag) })
+    [void]$menuRenk.Items.Add($mi)
+}
+
 Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsik5') -EsikAlan 'esik5'
 Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsikH') -EsikAlan 'esikH'
 
 (Get-Ogesi 'MnuSifirla').Add_Click({
-    if ($script:Ayar.tema -eq 'serit') {
-        Set-SeritVarsayilanKonumu
-        $script:Ayar.seritSol = $script:KonumSol
-        $script:Ayar.seritUst = $script:KonumUst
-    } else {
-        Set-VarsayilanKonum
-        $script:Ayar.sol = $script:KonumSol
-        $script:Ayar.ust = $script:KonumUst
-    }
+    if ($script:Ayar.tema -eq 'serit') { Set-SeritVarsayilanKonumu } else { Set-VarsayilanKonum }
+    $a = Get-KonumAnahtari
+    $script:Ayar.($a[0]) = $script:KonumSol
+    $script:Ayar.($a[1]) = $script:KonumUst
     Save-Ayarlar -Ayar $script:Ayar
 })
 
 (Get-Ogesi 'MnuKapat').Add_Click({ $win.Close() })
 (Get-Ogesi 'MnuTemaKart').Add_Click({  Set-Tema 'kart' })
 (Get-Ogesi 'MnuTemaSerit').Add_Click({ Set-Tema 'serit' })
+(Get-Ogesi 'MnuTemaKompakt').Add_Click({ Set-Tema 'kompakt' })
+(Get-Ogesi 'MnuTemaTerminal').Add_Click({ Set-Tema 'terminal' })
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sağ tık menüsü kapatma nöbetçisi
@@ -1478,7 +1764,8 @@ $win.Add_SourceInitialized({
 
 $win.Add_ContentRendered({
     Set-MasaustuSeviyesi
-    Set-Tema $script:Ayar.tema -Kaydetme    # kayıtlı temayı geri yükle
+    Set-Renkler $script:Ayar.renk -Kaydetme   # kayıtlı palet
+    Set-Tema $script:Ayar.tema -Kaydetme      # kayıtlı yerleşim
     $veriTimer.Start()
 
     # Öz-test (KULLANIM_ESIKTEST=1): eşik menüsü öğesine GERÇEKTEN tıklar.
@@ -1493,15 +1780,28 @@ $win.Add_ContentRendered({
             (Get-Ogesi $Ad).RaiseEvent(
                 (New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.MenuItem]::ClickEvent)))
         }
-        foreach ($adim in @(@('MnuTemaSerit', 'serit'), @('MnuTemaKart', 'kart'))) {
+        foreach ($k in @('serit', 'kompakt', 'terminal', 'kart')) {
             try {
-                & $tikla $adim[0]
+                & $tikla $YERLESIMLER[$k].Menu
                 $win.UpdateLayout()
-                Write-Tani ("TEMATEST {0}: ayar={1} serit={2} kart={3} topmost={4} dipte={5}" -f `
-                    $adim[1], $script:Ayar.tema, $SeritKapsul.Visibility, $Kapsul.Visibility,
-                    $win.Topmost, [ZDuzeni]::Dipte)
+                Write-Tani ("TEMATEST {0}: ayar={1} kart={2} serit={3} kompakt={4} terminal={5} topmost={6} dipte={7}" -f `
+                    $k, $script:Ayar.tema, $Kapsul.Visibility, $SeritKapsul.Visibility,
+                    $KompaktKapsul.Visibility, $TerminalKapsul.Visibility, $win.Topmost, [ZDuzeni]::Dipte)
             } catch {
-                Write-Tani ("TEMATEST {0} HATA: {1}" -f $adim[1], $_.Exception.Message)
+                Write-Tani ("TEMATEST {0} HATA: {1}" -f $k, $_.Exception.Message)
+            }
+        }
+
+        # Renk menüsü kodla üretiliyor; öğeleri Tag'lerinden bulup tıklıyoruz.
+        foreach ($ad in $RENKLER.Keys) {
+            try {
+                $oge = (Get-Ogesi 'MnuRenk').Items | Where-Object { [string]$_.Tag -eq $ad } | Select-Object -First 1
+                if ($null -eq $oge) { Write-Tani ("RENKTEST {0}: MENU OGESI YOK" -f $ad); continue }
+                $oge.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.MenuItem]::ClickEvent)))
+                Write-Tani ("RENKTEST {0}: ayar={1} dusuk={2} isaretli={3}" -f `
+                    $ad, $script:Ayar.renk, $script:Renk.Dusuk, $oge.IsChecked)
+            } catch {
+                Write-Tani ("RENKTEST {0} HATA: {1}" -f $ad, $_.Exception.Message)
             }
         }
         # Konumlandırma ertelenmiş olduğu için ölçüyü bir tur sonra al.
