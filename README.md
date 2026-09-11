@@ -1,4 +1,4 @@
-# Claude Usage Widget
+# Claude Usage
 
 A transparent desktop widget for Windows that shows how much of your
 **Claude subscription's 5-hour and weekly rate limits** you have used — plus a
@@ -213,7 +213,7 @@ powershell -ExecutionPolicy Bypass -File kur-baslangic.ps1
   Startup can also be toggled from **right-click → *Start at sign-in***; the
   Start menu shortcut is unaffected, since that is how you reopen the widget.
 
-  **Closed the widget? Type "Claude Kullanim" in Start.** Right-click → *Close*
+  **Closed the widget? Type "Claude Usage" in Start.** Right-click → *Close*
   only closes the window; nothing else needs undoing.
 
   Both shortcuts go through `conhost.exe` rather than calling `powershell.exe`

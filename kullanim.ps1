@@ -177,8 +177,10 @@ $YoklayiciBetik = Join-Path $PSScriptRoot 'kota-yokla.js'
 # Açılışta başlatma kısayolu. Menüden açılıp kapatılabiliyor, o yüzden yolu
 # widget'ın da bilmesi gerek. KULLANIM_BASLANGIC_YOL yalnızca testler için:
 # gerçek Başlangıç klasörüne dokunmadan sınamayı sağlıyor.
+$KISAYOL_ADI = 'Claude Usage.lnk'
+$IkonDosya = Join-Path $PSScriptRoot 'claude-usage.ico'
 $BaslangicKisayolu = if ($env:KULLANIM_BASLANGIC_YOL) { $env:KULLANIM_BASLANGIC_YOL }
-                     else { Join-Path ([Environment]::GetFolderPath('Startup')) 'Claude Kullanim.lnk' }
+                     else { Join-Path ([Environment]::GetFolderPath('Startup')) $KISAYOL_ADI }
 $API_BAYAT_SN = 300     # API ölçümü bu kadar sonra bayat sayılır
 $YOKLAMA_SECENEKLERI = @(0, 60, 120, 300)   # 0 = kapalı
 
@@ -205,6 +207,26 @@ $MASAUSTU_HIZ_DK   = 60     # tüketim hızı için geriye bakış (15 dk'lık �
 
 # Arka plan artık ALFA seçiyor; rengi tema veriyor. İkisi çarpışmasın diye
 # ayrıldı: "koyu/hafif/yok" saydamlık tercihidir, tema ise palet.
+# TEK ÖRNEK KORUMASI
+#
+# İki kopya aynı anda çalışırsa ikisi de pencere.json'a yazıyor: biri
+# sürüklenince diğeri eski konumu geri yazıyor, menü seçimleri birbirini
+# eziyor. Üstelik ekranda üst üste duran iki pencere "kapattım ama duruyor"
+# ya da "açtım ama kapandı" gibi görünüyor.
+#
+# Kilidin adı VERİ KLASÖRÜNDEN türüyor: yalıtılmış APPDATA ile çalışan
+# testler birbirini ve üretimi engellemesin.
+$kilitAdi = 'Local\ClaudeUsageWidget_' + (
+    ([System.Security.Cryptography.MD5]::Create().ComputeHash(
+        [Text.Encoding]::UTF8.GetBytes($VeriKlasor.ToLowerInvariant())
+    ) | ForEach-Object { $_.ToString('x2') }) -join '')
+$script:TekOrnek = New-Object System.Threading.Mutex($false, $kilitAdi)
+if (-not $script:TekOrnek.WaitOne(0)) {
+    # Zaten açık. Sessizce çık — ikinci pencere açmak faydadan çok zarar.
+    Write-Tani 'tek ornek: zaten calisiyor, cikiliyor'
+    exit 0
+}
+
 $ArkaPlanlar = @{ yok = '00'; hafif = '59'; koyu = 'A6' }
 
 # Renk temaları. Varsayılan dışındakiler yaygın açık kaynak paletlerden
@@ -455,7 +477,7 @@ function T { param([string]$Anahtar) return $METINLER[$DIL][$Anahtar] }
 $xamlMetin = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Claude Kullanim"
+        Title="Claude Usage"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ShowInTaskbar="False" Topmost="False" ResizeMode="NoResize"
         SizeToContent="WidthAndHeight" WindowStartupLocation="Manual"
@@ -2019,7 +2041,7 @@ function Set-Baslangic {
             $lnk.Arguments        = "$psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$betik`""
             $lnk.WorkingDirectory = $PSScriptRoot
             $lnk.Description      = 'Claude Kullanim - limit widgeti'
-            $lnk.IconLocation     = "$env:WINDIR\System32\shell32.dll,222"
+            $lnk.IconLocation     = $(if (Test-Path $IkonDosya) { $IkonDosya } else { "$env:WINDIR\System32\shell32.dll,222" })
             $lnk.WindowStyle      = 7
             $lnk.Save()
         } elseif (Test-Path $BaslangicKisayolu) {
@@ -2201,6 +2223,12 @@ $win.Add_ContentRendered({
     # StrictMode altında betik hiç başlamazdı.
 })
 
-$win.Add_Closed({ $veriTimer.Stop() })
+$win.Add_Closed({
+    $veriTimer.Stop()
+    # Neden kapandığını kaydet: "açtım ama kapandı" şikâyetinde tek kanıt bu.
+    # Süreç dışarıdan öldürülürse bu satır yazılmaz — o da bir bilgidir.
+    Write-Tani 'pencere kapandi (Close cagrildi)'
+    try { $script:TekOrnek.ReleaseMutex() } catch { }
+})
 
 [void]$win.ShowDialog()

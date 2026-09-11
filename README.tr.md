@@ -269,7 +269,7 @@ Durumu görmek: `node statusline.js durum`.
 Açılışta başlamayı **sağ tık → Açılışta başlat** ile açıp kapatabilirsiniz;
 Başlat menüsü kısayolu bundan etkilenmez (kapattıktan sonra açmanın yolu o).
 
-**Widget'ı kapattıysanız: Başlat'a "Claude Kullanim" yazın.** Sağ tık → *Kapat*
+**Widget'ı kapattıysanız: Başlat'a "Claude Usage" yazın.** Sağ tık → *Kapat*
 yalnızca pencereyi kapatır; geri almanız gereken başka bir şey yok.
 Masaüstüne de isterseniz: `.\kur-baslangic.ps1 -Masaustune`
 

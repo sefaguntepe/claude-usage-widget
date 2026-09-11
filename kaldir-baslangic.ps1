@@ -1,24 +1,29 @@
 <#
-    Claude Kullanım widget'ının kısayollarını kaldırır
+    Claude Usage widget'ının kısayollarını kaldırır
     (Başlangıç + Başlat menüsü + varsa masaüstü).
 
+    Eski adla (1.9.3 öncesi) kalmış kısayollar da temizlenir.
     Widget çalışıyorsa dokunulmaz — yalnızca kısayollar silinir.
 #>
 
 $ErrorActionPreference = 'Stop'
 
-$yollar = @(
-    (Join-Path ([Environment]::GetFolderPath('Startup'))  'Claude Kullanim.lnk'),
-    (Join-Path ([Environment]::GetFolderPath('Programs')) 'Claude Kullanim.lnk'),
-    (Join-Path ([Environment]::GetFolderPath('Desktop'))  'Claude Kullanim.lnk')
+$adlar = @('Claude Usage.lnk', 'Claude Kullanim.lnk')
+$dizinler = @(
+    [Environment]::GetFolderPath('Startup'),
+    [Environment]::GetFolderPath('Programs'),
+    [Environment]::GetFolderPath('Desktop')
 )
 
 $silinen = 0
-foreach ($y in $yollar) {
-    if (Test-Path $y) {
-        Remove-Item $y -Force
-        Write-Host "Kaldirildi: $y" -ForegroundColor Green
-        $silinen++
+foreach ($d in $dizinler) {
+    foreach ($a in $adlar) {
+        $y = Join-Path $d $a
+        if (Test-Path $y) {
+            Remove-Item $y -Force
+            Write-Host "Kaldirildi: $y" -ForegroundColor Green
+            $silinen++
+        }
     }
 }
 
