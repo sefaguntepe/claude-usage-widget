@@ -162,7 +162,7 @@ diske yazdığını okur.
 | `statusline.js` | `settings.json`'daki statusLine **ve hook** ayarlarını kurar/kaldırır (yedekleyerek) |
 | `kota-yokla.js` | **Opsiyonel.** Canlı yoklama açıksa çalışır: OAuth erişim jetonuyla resmî kullanım ucunu yoklar, kota.json'u yazar. Jetona dokunan TEK dosya |
 | `kullanim.ps1` | Widget penceresi |
-| `kur-baslangic.ps1` / `kaldir-baslangic.ps1` | Windows açılışına ekle/çıkar |
+| `kur-baslangic.ps1` / `kaldir-baslangic.ps1` | Kısayolları kur/kaldır (Başlangıç + Başlat menüsü, `-Masaustune` ile masaüstü) |
 
 ## Terminal satırı
 
@@ -258,6 +258,20 @@ powershell -ExecutionPolicy Bypass -File kur-baslangic.ps1
 `kur` hem statusLine'ı hem `Stop`/`Notification` hook'larını kurar.
 Kaldırmak: `node statusline.js kaldir` ve `kaldir-baslangic.ps1`.
 Durumu görmek: `node statusline.js durum`.
+
+`kur-baslangic.ps1` **iki** kısayol oluşturur, ikisi de aynı komutu çalıştırır:
+
+| Nerede | Ne için |
+|---|---|
+| Başlangıç klasörü | Windows açılışında kendiliğinden başlasın |
+| Başlat menüsü | Widget'ı **kapattıktan sonra elle açmak** için |
+
+**Widget'ı kapattıysanız: Başlat'a "Claude Kullanim" yazın.** Sağ tık → *Kapat*
+yalnızca pencereyi kapatır; geri almanız gereken başka bir şey yok.
+Masaüstüne de isterseniz: `.\kur-baslangic.ps1 -Masaustune`
+
+İkisi de `powershell.exe`'yi doğrudan çağırmak yerine `conhost.exe` üzerinden
+gider — sebebi "Tuzaklar" bölümünde.
 
 `statusline.js` her yazmadan önce `settings.json`'u
 `settings.json.yedek-<tarih>` olarak yedekler; size ait olmayan bir statusLine

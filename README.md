@@ -205,7 +205,17 @@ powershell -ExecutionPolicy Bypass -File kur-baslangic.ps1
 - `node statusline.js kur` registers the status line and the two hooks in
   `~/.claude/settings.json`. It **backs the file up first**, refuses to touch a
   status line that is not ours, and preserves other people's hook entries.
-- `kur-baslangic.ps1` adds a Startup shortcut so the widget launches at sign-in.
+- `kur-baslangic.ps1` creates **two** shortcuts, both running the same command:
+  one in Startup so the widget launches at sign-in, and one in the Start menu so
+  you can reopen it after closing it — the Startup folder is not a practical
+  place to click. Add `-Masaustune` for a desktop shortcut too.
+
+  **Closed the widget? Type "Claude Kullanim" in Start.** Right-click → *Close*
+  only closes the window; nothing else needs undoing.
+
+  Both shortcuts go through `conhost.exe` rather than calling `powershell.exe`
+  directly — see the pitfalls section for why `-WindowStyle Hidden` alone is
+  not enough.
 
 Check the current state any time with `node statusline.js durum`.
 
