@@ -97,9 +97,11 @@ How the split is built, and why:
 - **The token is never logged.** Error paths keep the HTTP status code and
   nothing else — no headers, no body.
 
-> **`kota-yokla.js` is not included in this repository yet.** The menu option
-> exists, but with the script absent the widget says so on its face and keeps
-> using the file sources. Nothing happens silently.
+If `kota-yokla.js` is missing the widget says so on its face and keeps using
+the file sources — nothing fails silently. The script writes only the two
+percentages, their reset times and a measurement timestamp; on any failure it
+writes a short reason (`jeton-suresi-dolmus`, `ag-hatasi`, `http` + status) and
+the widget falls back to the files.
 
 ## When does the number update?
 

@@ -121,9 +121,11 @@ Ayrım nasıl kurulmuş, ve neden:
 - **Jeton hiçbir yere yazılmaz.** Hata yollarında yalnızca HTTP durum kodu
   tutulur — başlık yok, gövde yok (bir yanıt gövdesi jetonu yankılayabilir).
 
-> **`kota-yokla.js` bu depoda henüz yok.** Menüdeki seçenek duruyor ama betik
-> olmadan widget bunu ekranda söyler ve dosya kaynaklarıyla devam eder.
-> Hiçbir şey sessizce olmaz.
+`kota-yokla.js` yoksa widget bunu ekranda söyler ve dosya kaynaklarıyla devam
+eder — hiçbir şey sessizce başarısız olmaz. Betik yalnızca iki yüzdeyi,
+sıfırlanma saatlerini ve bir ölçüm damgasını yazar; herhangi bir hatada kısa
+bir gerekçe yazar (`jeton-suresi-dolmus`, `ag-hatasi`, `http` + durum kodu) ve
+widget dosya kaynaklarına düşer.
 
 ## Veri ne zaman güncellenir?
 
@@ -158,6 +160,7 @@ diske yazdığını okur.
 | `durum-yaz.js` | statusLine betiği: durum.json'u yazar + terminal satırını basar |
 | `olay-yaz.js` | `Stop` / `Notification` hook betiği: olay.json'u yazar |
 | `statusline.js` | `settings.json`'daki statusLine **ve hook** ayarlarını kurar/kaldırır (yedekleyerek) |
+| `kota-yokla.js` | **Opsiyonel.** Canlı yoklama açıksa çalışır: OAuth erişim jetonuyla resmî kullanım ucunu yoklar, kota.json'u yazar. Jetona dokunan TEK dosya |
 | `kullanim.ps1` | Widget penceresi |
 | `kur-baslangic.ps1` / `kaldir-baslangic.ps1` | Windows açılışına ekle/çıkar |
 
