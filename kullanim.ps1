@@ -348,7 +348,7 @@ $METINLER = @{
         MENU_ESIK='Uyarı eşiği'; MENU_5SAAT='5 saatlik limit'; MENU_HAFTA='Haftalık'
         MENU_SIFIRLA='Konumu sıfırla (sağ üst)'; MENU_KAPAT='Kapat'; MENU_KAPALI='Kapalı'
         MENU_TEMA='Görünüm'; TEMA_KART='Kart'; TEMA_SERIT='Şerit (alt bar)'; MENU_RENK='Renkler'
-        MENU_YOKLAMA='Canlı yoklama (API)'; YOKLAMA_KAPALI='Kapalı (varsayılan)'
+        HIZ_KISA='⚠ ~{0}'; MENU_YOKLAMA='Canlı yoklama (API)'; YOKLAMA_KAPALI='Kapalı (varsayılan)'
         YOKLAMA_SN='{0} saniyede bir'; KAYNAK_API='API'
         YOKLAMA_BASLIK='Canlı yoklamayı açmak üzeresiniz'
         YOKLAMA_UYARI=@'
@@ -396,7 +396,7 @@ Açmak istiyor musunuz?
         MENU_ESIK='Alert threshold'; MENU_5SAAT='5-hour limit'; MENU_HAFTA='Weekly'
         MENU_SIFIRLA='Reset position (top right)'; MENU_KAPAT='Close'; MENU_KAPALI='Off'
         MENU_TEMA='Appearance'; TEMA_KART='Card'; TEMA_SERIT='Strip (taskbar)'; MENU_RENK='Colours'
-        MENU_YOKLAMA='Live polling (API)'; YOKLAMA_KAPALI='Off (default)'
+        HIZ_KISA='⚠ ~{0}'; MENU_YOKLAMA='Live polling (API)'; YOKLAMA_KAPALI='Off (default)'
         YOKLAMA_SN='Every {0} seconds'; KAYNAK_API='API'
         YOKLAMA_BASLIK='You are about to enable live polling'
         YOKLAMA_UYARI=@'
@@ -770,6 +770,7 @@ $script:Kota = $null                  # canlı yoklama sonucu (opsiyonel kaynak)
 $script:KotaSonYazma = [datetime]::MinValue
 $script:SonYoklama = [datetime]::MinValue
 $script:YoklayiciUyarildi = $false
+$script:HizKisa = $null               # dar yerleşimler için kısa hız uyarısı
 $script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
 $script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
@@ -1354,12 +1355,16 @@ function Update-Hiz {
     $HizUyari.Visibility = $(if ($null -eq $metin) { 'Collapsed' } else { 'Visible' })
     if ($null -ne $metin) { $HizUyari.Text = $metin }
 
-    # Kart dışındaki yerleşimlerde bu satır için yer yok; orada barın neden
-    # kırmızıya döndüğünü araç ipucu anlatsın. Yoksa kırmızı sebepsiz görünüyor
-    # — kullanıcı "%42'de neden kırmızı?" diye sormak zorunda kalıyor.
-    foreach ($kapsul in @($SeritKapsul, $KompaktKapsul, $TerminalKapsul)) {
-        $kapsul.ToolTip = $metin
-    }
+    # Kart dışındaki yerleşimler bunu kendi dar alanlarında gösteriyor; metni
+    # oraya taşımak için sakla.
+    #
+    # ARAÇ İPUCU DENENDİ, ÇALIŞMIYOR: pencere WS_EX_NOACTIVATE ile açıldığı
+    # için hiçbir zaman etkin olmuyor ve WPF'in ToolTipService'i açılır
+    # pencereyi göstermiyor. ToolTip ATANIYOR ama ekranda çıkmıyor — sessizce.
+    # (Aynı kökten üçüncü sorun: sağ tık menüsünün kapanmaması ve odak kaybı
+    # olaylarının hiç gelmemesi de buradan geliyordu.)
+    $script:HizKisa = $(if ($null -eq $BitisDk -or $null -eq $metin) { $null }
+                        else { (T 'HIZ_KISA') -f (Format-Sure ([int]$BitisDk)) })
     Write-Tani ("hiz: bitisDk={0} uyari={1}" -f $BitisDk, $(if ($null -eq $metin) { 'yok' } else { $metin }))
 }
 
@@ -1666,6 +1671,8 @@ function Update-Kompakt {
     $haf = Get-PencereGorunumu $(if ($null -ne $script:Veri) { $script:Veri.seven_day } else { $null }) $null
     Set-MiniBar $bes $Kompakt5 $Kompakt5Dolgu $KOMPAKT_IZ
     Set-MiniBar $haf $KompaktH $KompaktHDolgu $KOMPAKT_IZ
+    # Kompakt'ta metin için yer yok; kırmızının sebebini tek işaret taşıyor.
+    if ($script:VeriTaze -and $null -ne $script:HizKisa -and $bes.Var) { $Kompakt5.Text += ' ⚠' }
     $Kompakt5.Foreground = ConvertTo-Fircasi $(if ($bes.Var) { $bes.Renk } else { $script:Renk.Bayat })
     $KompaktH.Foreground = ConvertTo-Fircasi $(if ($haf.Var) { $haf.Renk } else { $script:Renk.Bayat })
 }
@@ -1714,9 +1721,12 @@ function Update-Terminal {
     $parca = @()
     if ($bes.Var -and $null -ne $bes.Sifirlanma) { $parca += Format-Kalan $bes.Sifirlanma }
     if ($script:VeriTaze) {
-        if ($script:KullanimSonrasi) { $parca += '+' }
+        if ($null -ne $script:HizKisa) { $parca += $script:HizKisa }
+        if ($script:KullanimSonrasi)   { $parca += '+' }
     } else { $parca += $Yas.Text }
     $TerminalAlt.Text = ($parca -join '  ·  ')
+    $TerminalAlt.Foreground = ConvertTo-Fircasi $(
+        if ($script:VeriTaze -and $null -ne $script:HizKisa) { $script:Renk.Yuksek } else { $script:Renk.Solgun })
 }
 
 function Update-Serit {
@@ -1757,7 +1767,18 @@ function Update-Serit {
 
     if ($script:VeriTaze -and $script:KullanimSonrasi -and $Serit5Yuzde.Text -ne '—') { $Serit5Yuzde.Text += ' ▲' }
     $SeritKalan.Text = if ($null -ne $bes) { Format-Kalan (ConvertFrom-UnixSaniye $bes.resets_at) } else { '' }
-    $SeritYas.Text   = if ($script:VeriTaze) { '' } else { $Yas.Text }
+
+    # Not yuvası, öncelik sırasıyla: veri bayatsa YAŞ (o zaman hız tahmini de
+    # güvenilmez), taze ve hız uyarısı varsa UYARI, yoksa boş.
+    if (-not $script:VeriTaze) {
+        $SeritYas.Text = $Yas.Text
+        $SeritYas.Foreground = ConvertTo-Fircasi $script:Renk.Orta
+    } elseif ($null -ne $script:HizKisa) {
+        $SeritYas.Text = $script:HizKisa
+        $SeritYas.Foreground = ConvertTo-Fircasi $script:Renk.Yuksek
+    } else {
+        $SeritYas.Text = ''
+    }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
