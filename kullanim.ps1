@@ -173,6 +173,12 @@ $MasaustuDosya = Join-Path $env:APPDATA 'Claude\plan-usage-history.json'
 # çalıştırılmaz, kota.json okunmaz.
 $KotaDosya = Join-Path $VeriKlasor 'kota.json'         # yoklayıcı yazar
 $YoklayiciBetik = Join-Path $PSScriptRoot 'kota-yokla.js'
+
+# Açılışta başlatma kısayolu. Menüden açılıp kapatılabiliyor, o yüzden yolu
+# widget'ın da bilmesi gerek. KULLANIM_BASLANGIC_YOL yalnızca testler için:
+# gerçek Başlangıç klasörüne dokunmadan sınamayı sağlıyor.
+$BaslangicKisayolu = if ($env:KULLANIM_BASLANGIC_YOL) { $env:KULLANIM_BASLANGIC_YOL }
+                     else { Join-Path ([Environment]::GetFolderPath('Startup')) 'Claude Kullanim.lnk' }
 $API_BAYAT_SN = 300     # API ölçümü bu kadar sonra bayat sayılır
 $YOKLAMA_SECENEKLERI = @(0, 60, 120, 300)   # 0 = kapalı
 
@@ -348,7 +354,7 @@ $METINLER = @{
         MENU_ESIK='Uyarı eşiği'; MENU_5SAAT='5 saatlik limit'; MENU_HAFTA='Haftalık'
         MENU_SIFIRLA='Konumu sıfırla (sağ üst)'; MENU_KAPAT='Kapat'; MENU_KAPALI='Kapalı'
         MENU_TEMA='Görünüm'; TEMA_KART='Kart'; TEMA_SERIT='Şerit (alt bar)'; MENU_RENK='Renkler'
-        HIZ_KISA='⚠ ~{0}'; MENU_YOKLAMA='Canlı yoklama (API)'; YOKLAMA_KAPALI='Kapalı (varsayılan)'
+        HIZ_KISA='⚠ ~{0}'; MENU_BASLANGIC='Açılışta başlat'; MENU_YOKLAMA='Canlı yoklama (API)'; YOKLAMA_KAPALI='Kapalı (varsayılan)'
         YOKLAMA_SN='{0} saniyede bir'; KAYNAK_API='API'
         YOKLAMA_BASLIK='Canlı yoklamayı açmak üzeresiniz'
         YOKLAMA_UYARI=@'
@@ -396,7 +402,7 @@ Açmak istiyor musunuz?
         MENU_ESIK='Alert threshold'; MENU_5SAAT='5-hour limit'; MENU_HAFTA='Weekly'
         MENU_SIFIRLA='Reset position (top right)'; MENU_KAPAT='Close'; MENU_KAPALI='Off'
         MENU_TEMA='Appearance'; TEMA_KART='Card'; TEMA_SERIT='Strip (taskbar)'; MENU_RENK='Colours'
-        HIZ_KISA='⚠ ~{0}'; MENU_YOKLAMA='Live polling (API)'; YOKLAMA_KAPALI='Off (default)'
+        HIZ_KISA='⚠ ~{0}'; MENU_BASLANGIC='Start at sign-in'; MENU_YOKLAMA='Live polling (API)'; YOKLAMA_KAPALI='Off (default)'
         YOKLAMA_SN='Every {0} seconds'; KAYNAK_API='API'
         YOKLAMA_BASLIK='You are about to enable live polling'
         YOKLAMA_UYARI=@'
@@ -486,6 +492,7 @@ $xamlMetin = @'
         <MenuItem x:Name="MnuEsikH" Header="@@MENU_HAFTA@@"/>
       </MenuItem>
       <Separator/>
+      <MenuItem x:Name="MnuBaslangic" Header="@@MENU_BASLANGIC@@" IsCheckable="True"/>
       <MenuItem x:Name="MnuSifirla" Header="@@MENU_SIFIRLA@@"/>
       <MenuItem x:Name="MnuKapat"   Header="@@MENU_KAPAT@@"/>
     </ContextMenu>
@@ -1986,6 +1993,48 @@ Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsikH') -EsikAlan 'esikH'
     Save-Ayarlar -Ayar $script:Ayar
 })
 
+# Açılışta başlatma anahtarı.
+#
+# Kısayolu KUR-BASLANGIC.PS1 DA oluşturuyor; burada yalnızca Başlangıç
+# klasöründeki tek kısayol yönetiliyor (kurulum betiği ayrıca Başlat menüsü
+# kısayolunu da koyar, o kalıcıdır — widget'ı kapattıktan sonra açmanın yolu o).
+# Ayar dosyasında tutulmuyor: tek doğruluk kaynağı kısayolun kendisi, yoksa
+# ayar ile gerçek birbirinden ayrı düşer.
+function Test-Baslangic { return (Test-Path $BaslangicKisayolu) }
+
+function Set-Baslangic {
+    param([bool]$Acik)
+    try {
+        if ($Acik) {
+            $betik = Join-Path $PSScriptRoot 'kullanim.ps1'
+            $psExe = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+            $dizin = Split-Path -Parent $BaslangicKisayolu
+            if (-not (Test-Path $dizin)) { New-Item -ItemType Directory -Path $dizin -Force | Out-Null }
+
+            $sh = New-Object -ComObject WScript.Shell
+            $lnk = $sh.CreateShortcut($BaslangicKisayolu)
+            # conhost.exe üzerinden: Windows Terminal varsayılanken
+            # -WindowStyle Hidden boş bir terminal bırakıyor (bkz. Tuzaklar).
+            $lnk.TargetPath       = "$env:WINDIR\System32\conhost.exe"
+            $lnk.Arguments        = "$psExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$betik`""
+            $lnk.WorkingDirectory = $PSScriptRoot
+            $lnk.Description      = 'Claude Kullanim - limit widgeti'
+            $lnk.IconLocation     = "$env:WINDIR\System32\shell32.dll,222"
+            $lnk.WindowStyle      = 7
+            $lnk.Save()
+        } elseif (Test-Path $BaslangicKisayolu) {
+            Remove-Item $BaslangicKisayolu -Force
+        }
+    } catch {
+        Write-Tani ('baslangic ayari hatasi: ' + $_.Exception.Message)
+    }
+    # İşaret kutusu DİLEKTEN değil GERÇEKTEN okunuyor: yazma başarısızsa
+    # (izin, kilitli klasör) menü yalan söylemesin.
+    (Get-Ogesi 'MnuBaslangic').IsChecked = Test-Baslangic
+}
+
+(Get-Ogesi 'MnuBaslangic').Add_Click({ param($s, $e) Set-Baslangic ([bool]$s.IsChecked) })
+
 (Get-Ogesi 'MnuKapat').Add_Click({ $win.Close() })
 (Get-Ogesi 'MnuTemaKart').Add_Click({  Set-Tema 'kart' })
 (Get-Ogesi 'MnuTemaSerit').Add_Click({ Set-Tema 'serit' })
@@ -2071,6 +2120,7 @@ $win.Add_SourceInitialized({
 
 $win.Add_ContentRendered({
     Set-MasaustuSeviyesi
+    (Get-Ogesi 'MnuBaslangic').IsChecked = Test-Baslangic
     Set-Renkler $script:Ayar.renk -Kaydetme   # kayıtlı palet
     Set-Tema $script:Ayar.tema -Kaydetme      # kayıtlı yerleşim
     $veriTimer.Start()
@@ -2081,6 +2131,23 @@ $win.Add_ContentRendered({
     # Öz-test (KULLANIM_TEMATEST=1): tema menüsüne GERÇEKTEN tıklar. Eşik
     # menüsündeki closure kapsam hatası tam da "elle ayar dosyası yazarak
     # test ettim" diye gözden kaçmıştı; tema anahtarı aynı tuzağa düşmesin.
+    # Öz-test (KULLANIM_BASLANGICTEST=1): açılışta başlat anahtarına GERÇEKTEN
+    # tıklar — aç, kapat, tekrar aç. Kısayol yolu KULLANIM_BASLANGIC_YOL ile
+    # yönlendirildiği için gerçek Başlangıç klasörüne dokunulmaz.
+    if ($env:KULLANIM_BASLANGICTEST -eq '1') {
+        $oge = Get-Ogesi 'MnuBaslangic'
+        foreach ($istenen in @($true, $false, $true)) {
+            try {
+                $oge.IsChecked = $istenen      # IsCheckable davranışını taklit et
+                $oge.RaiseEvent((New-Object System.Windows.RoutedEventArgs([System.Windows.Controls.MenuItem]::ClickEvent)))
+                Write-Tani ("BASLANGICTEST istenen={0} dosyaVar={1} isaret={2}" -f `
+                    $istenen, (Test-Baslangic), $oge.IsChecked)
+            } catch {
+                Write-Tani ("BASLANGICTEST HATA: " + $_.Exception.Message)
+            }
+        }
+    }
+
     if ($env:KULLANIM_TEMATEST -eq '1') {
         $tikla = {
             param($Ad)

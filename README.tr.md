@@ -266,6 +266,9 @@ Durumu görmek: `node statusline.js durum`.
 | Başlangıç klasörü | Windows açılışında kendiliğinden başlasın |
 | Başlat menüsü | Widget'ı **kapattıktan sonra elle açmak** için |
 
+Açılışta başlamayı **sağ tık → Açılışta başlat** ile açıp kapatabilirsiniz;
+Başlat menüsü kısayolu bundan etkilenmez (kapattıktan sonra açmanın yolu o).
+
 **Widget'ı kapattıysanız: Başlat'a "Claude Kullanim" yazın.** Sağ tık → *Kapat*
 yalnızca pencereyi kapatır; geri almanız gereken başka bir şey yok.
 Masaüstüne de isterseniz: `.\kur-baslangic.ps1 -Masaustune`

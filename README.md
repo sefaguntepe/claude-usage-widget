@@ -210,6 +210,9 @@ powershell -ExecutionPolicy Bypass -File kur-baslangic.ps1
   you can reopen it after closing it — the Startup folder is not a practical
   place to click. Add `-Masaustune` for a desktop shortcut too.
 
+  Startup can also be toggled from **right-click → *Start at sign-in***; the
+  Start menu shortcut is unaffected, since that is how you reopen the widget.
+
   **Closed the widget? Type "Claude Kullanim" in Start.** Right-click → *Close*
   only closes the window; nothing else needs undoing.
 
