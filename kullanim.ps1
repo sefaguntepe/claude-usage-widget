@@ -158,6 +158,24 @@ $AyarDosya   = Join-Path $VeriKlasor 'pencere.json'    # widget yazar
 # t/org/u.fh/u.sd) — uymayan dosya sessizce yok sayılır, statusLine'a düşülür.
 $MasaustuDosya = Join-Path $env:APPDATA 'Claude\plan-usage-history.json'
 
+# ÜÇÜNCÜ KAYNAK — OPSİYONEL, VARSAYILAN KAPALI: "canlı yoklama".
+#
+# Widget'ın iki varsayılan kaynağı Claude'un zaten diske yazdığı dosyalardır;
+# hiçbir kimlik bilgisine dokunulmaz, ağa çıkılmaz. Bunun bedeli masaüstü
+# oturumlarında ~15 dakikaya varan gecikmedir.
+#
+# Kullanıcı isterse bu gecikmeyi ~60 saniyeye indirebilir: ayrı bir betik
+# (kota-yokla.js) OAuth jetonuyla resmi kullanım ucunu yoklar ve sonucu
+# kota.json'a yazar. Widget o dosyayı diğer ikisi gibi yalnızca OKUR —
+# jetonu hiç görmez. Sır taşıyan kod tek dosyada toplanmıştır.
+#
+# Bu seçenek AÇIKÇA açılmadıkça hiçbir şey değişmez: kota-yokla.js
+# çalıştırılmaz, kota.json okunmaz.
+$KotaDosya = Join-Path $VeriKlasor 'kota.json'         # yoklayıcı yazar
+$YoklayiciBetik = Join-Path $PSScriptRoot 'kota-yokla.js'
+$API_BAYAT_SN = 300     # API ölçümü bu kadar sonra bayat sayılır
+$YOKLAMA_SECENEKLERI = @(0, 60, 120, 300)   # 0 = kapalı
+
 $OLAY_OMUR_SN  = 900    # olay satırı 15 dk sonra kaybolur
 $YANIP_SONME_SN = 12    # ilk 12 saniye dikkat çeksin diye yanıp söner
 $COK_BAYAT_SN  = 43200  # 12 saatten eskiyse sebebini de yaz
@@ -225,13 +243,15 @@ function Get-Ayarlar {
                      tema = 'kart'; renk = 'varsayilan'
                      seritSol = $null; seritUst = $null
                      kompaktSol = $null; kompaktUst = $null
-                     terminalSol = $null; terminalUst = $null }
+                     terminalSol = $null; terminalUst = $null
+                     canliYoklama = 0; yoklamaOnaylandi = $false }
     if (Test-Path $AyarDosya) {
         try {
             $j = Get-Content $AyarDosya -Raw -Encoding UTF8 | ConvertFrom-Json
             foreach ($k in @('sol', 'ust', 'arkaPlan', 'esik5', 'esikH', 'atesli5', 'atesliH',
                              'tema', 'renk', 'seritSol', 'seritUst',
-                             'kompaktSol', 'kompaktUst', 'terminalSol', 'terminalUst')) {
+                             'kompaktSol', 'kompaktUst', 'terminalSol', 'terminalUst',
+                             'canliYoklama', 'yoklamaOnaylandi')) {
                 if ($j.PSObject.Properties.Name -contains $k -and $null -ne $j.$k) { $v[$k] = $j.$k }
             }
         } catch { }
@@ -324,6 +344,30 @@ $METINLER = @{
         MENU_ESIK='Uyarı eşiği'; MENU_5SAAT='5 saatlik limit'; MENU_HAFTA='Haftalık'
         MENU_SIFIRLA='Konumu sıfırla (sağ üst)'; MENU_KAPAT='Kapat'; MENU_KAPALI='Kapalı'
         MENU_TEMA='Görünüm'; TEMA_KART='Kart'; TEMA_SERIT='Şerit (alt bar)'; MENU_RENK='Renkler'
+        MENU_YOKLAMA='Canlı yoklama (API)'; YOKLAMA_KAPALI='Kapalı (varsayılan)'
+        YOKLAMA_SN='{0} saniyede bir'; KAYNAK_API='API'
+        YOKLAMA_BASLIK='Canlı yoklamayı açmak üzeresiniz'
+        YOKLAMA_UYARI=@'
+Bu seçenek widget''ın çalışma biçimini değiştirir.
+
+VARSAYILAN (kapalı): Widget yalnızca Claude''un zaten diske yazdığı dosyaları
+okur. Hiçbir kimlik bilgisine dokunmaz, ağa çıkmaz. Gecikme: masaüstü
+oturumlarında 15 dakikaya kadar.
+
+AÇIK: Ayrı bir betik, Claude Code''un OAuth erişim jetonunu okuyup resmi
+kullanım ucuna salt-okur istek atar. Gecikme ~{0} saniyeye iner.
+
+BİLMENİZ GEREKEN: O jeton DAR YETKİLİ DEĞİLDİR. Kapsamları arasında
+"user:inference" vardır — jetonu ele geçiren sizin adınıza çıkarım
+çalıştırabilir ve kotanızı harcayabilir.
+
+Kurumsal / iş bilgisayarında ÖNERİLMEZ: kimlik bilgisi tutup düzenli aralıklarla
+dış API''ye çıkan arka plan süreci, uç nokta koruma yazılımlarının işaretlediği
+bir desendir.
+
+Açmak istiyor musunuz?
+'@
+        YOKLAMA_BETIK_YOK='Canlı yoklama açık ama kota-yokla.js bulunamadı — dosya kaynaklarına devam ediliyor.'
         TEMA_KOMPAKT='Kompakt'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
@@ -348,6 +392,30 @@ $METINLER = @{
         MENU_ESIK='Alert threshold'; MENU_5SAAT='5-hour limit'; MENU_HAFTA='Weekly'
         MENU_SIFIRLA='Reset position (top right)'; MENU_KAPAT='Close'; MENU_KAPALI='Off'
         MENU_TEMA='Appearance'; TEMA_KART='Card'; TEMA_SERIT='Strip (taskbar)'; MENU_RENK='Colours'
+        MENU_YOKLAMA='Live polling (API)'; YOKLAMA_KAPALI='Off (default)'
+        YOKLAMA_SN='Every {0} seconds'; KAYNAK_API='API'
+        YOKLAMA_BASLIK='You are about to enable live polling'
+        YOKLAMA_UYARI=@'
+This option changes how the widget works.
+
+DEFAULT (off): The widget only reads files Claude already writes to disk. It
+touches no credentials and makes no network calls. Latency: up to 15 minutes
+in desktop sessions.
+
+ON: A separate script reads Claude Code''s OAuth access token and makes a
+read-only request to the official usage endpoint. Latency drops to ~{0} seconds.
+
+WHAT YOU SHOULD KNOW: That token is NOT narrowly scoped. Its scopes include
+"user:inference" — anyone who obtains it can run inference as you and spend
+your quota.
+
+NOT RECOMMENDED on a work or corporate machine: a background process holding a
+credential and making periodic calls to an external API is exactly the pattern
+endpoint protection software flags.
+
+Do you want to enable it?
+'@
+        YOKLAMA_BETIK_YOK='Live polling is on but kota-yokla.js was not found — falling back to the file sources.'
         TEMA_KOMPAKT='Compact'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5h'; SERIT_HAFTA='week'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
@@ -408,6 +476,7 @@ $xamlMetin = @'
         <MenuItem x:Name="MnuTemaKompakt" Header="@@TEMA_KOMPAKT@@" IsCheckable="True"/>
         <MenuItem x:Name="MnuTemaTerminal" Header="@@TEMA_TERMINAL@@" IsCheckable="True"/>
       </MenuItem>
+      <MenuItem x:Name="MnuYoklama" Header="@@MENU_YOKLAMA@@"/>
       <MenuItem Header="@@MENU_ESIK@@">
         <MenuItem x:Name="MnuEsik5" Header="@@MENU_5SAAT@@"/>
         <MenuItem x:Name="MnuEsikH" Header="@@MENU_HAFTA@@"/>
@@ -693,6 +762,10 @@ $script:DurumHam = $null             # statusLine'ın yazdığı ham dosya
 $script:SonYazma = [datetime]::MinValue
 $script:Masaustu = $null             # masaüstü uygulamasından son örnek + türevleri
 $script:MasaustuSonYazma = [datetime]::MinValue
+$script:Kota = $null                  # canlı yoklama sonucu (opsiyonel kaynak)
+$script:KotaSonYazma = [datetime]::MinValue
+$script:SonYoklama = [datetime]::MinValue
+$script:YoklayiciUyarildi = $false
 $script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
 $script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
@@ -941,7 +1014,63 @@ function Read-Masaustu {
     }
 }
 
-# İki kaynak da aynı API'nin bir fotoğrafı; ÖLÇÜM ZAMANI daha yeni olan kazanır.
+# Canlı yoklama sonucu. Widget burada da yalnızca OKUR; jetonu gören tek yer
+# kota-yokla.js'tir. Dosya bir hata durumu taşıyorsa (jeton yok, süresi dolmuş,
+# HTTP hatası) sessizce yok sayılır — dosya kaynakları zaten yerinde.
+function Read-Kota {
+    if ($script:Ayar.canliYoklama -le 0) { $script:Kota = $null; return }
+    if (-not (Test-Path $KotaDosya)) { $script:Kota = $null; return }
+    try {
+        $bilgi = Get-Item $KotaDosya
+        if ($bilgi.LastWriteTime -le $script:KotaSonYazma) { return }
+        $j = Get-Content $KotaDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+        $script:KotaSonYazma = $bilgi.LastWriteTime
+
+        if (Test-Ozellik $j 'hata') {
+            Write-Tani ("kota: yoklayici hata bildirdi -> " + [string]$j.hata)
+            $script:Kota = $null; return
+        }
+        $olcum = if (Test-Ozellik $j 'olcumZamani') { [int64]$j.olcumZamani } else { $null }
+        if (-not (Test-OlcumZamani $olcum)) {
+            Write-Tani 'kota: ileri tarihli olcum, yok sayildi'
+            $script:Kota = $null; return
+        }
+        if (-not (Test-Ozellik $j 'five_hour') -and -not (Test-Ozellik $j 'seven_day')) {
+            $script:Kota = $null; return
+        }
+        $script:Kota = $j
+        Write-Tani ("kota: olcum={0} f5={1}" -f $olcum, $j.five_hour.used_percentage)
+    } catch {
+        Write-Tani ("kota: okuma hatasi " + $_.Exception.Message)
+    }
+}
+
+# Yoklayıcıyı tetikler. Jetonu okuyan ve ağa çıkan TEK yer o betiktir; widget
+# yalnızca "şimdi çalış" der. Konsol penceresi açılmasın diye WScript.Shell ile
+# gizli başlatılıyor (Start-Process kısa ömürlü konsol uygulamalarında
+# göz kırpma üretiyor).
+function Invoke-Yoklayici {
+    $sn = [int]$script:Ayar.canliYoklama
+    if ($sn -le 0) { return }
+    if (([DateTime]::Now - $script:SonYoklama).TotalSeconds -lt $sn) { return }
+
+    if (-not (Test-Path $YoklayiciBetik)) {
+        if (-not $script:YoklayiciUyarildi) {
+            Write-Tani ('yoklayici betigi yok: ' + $YoklayiciBetik)
+            $script:YoklayiciUyarildi = $true
+        }
+        return
+    }
+    $script:SonYoklama = [DateTime]::Now
+    try {
+        $kabuk = New-Object -ComObject WScript.Shell
+        [void]$kabuk.Run(('node "{0}"' -f $YoklayiciBetik), 0, $false)   # 0 = gizli pencere
+    } catch {
+        Write-Tani ('yoklayici baslatilamadi: ' + $_.Exception.Message)
+    }
+}
+
+# Kaynaklar aynı API'nin fotoğrafı; ÖLÇÜM ZAMANI daha yeni olan kazanır.
 # Masaüstü kazanırsa yüzdeler oradan gelir; sıfırlanma saati yalnızca
 # statusLine'ın gördüğü pencere hâlâ açıksa korunur — pencere dönmüşse
 # uydurulmaz, boş bırakılır (geri sayım gösterilmez).
@@ -993,7 +1122,23 @@ function Merge-Kaynaklar {
 function Read-Durum {
     Read-DurumDosyasi
     Read-Masaustu
+    Read-Kota
     $script:Veri = Merge-Kaynaklar
+    # Canlı yoklama açıksa API sonucu en taze kaynaktır; ölçüm zamanı ona göre.
+    if ($null -ne $script:Kota) {
+        $kOlcum = [int64]$script:Kota.olcumZamani
+        $vOlcum = if (Test-Ozellik $script:Veri 'olcumZamani') { [int64]$script:Veri.olcumZamani } else { 0 }
+        if ($kOlcum -gt $vOlcum) {
+            $v = [ordered]@{}
+            if ($null -ne $script:Veri) { foreach ($oz in $script:Veri.PSObject.Properties) { $v[$oz.Name] = $oz.Value } }
+            $v.five_hour = $script:Kota.five_hour
+            $v.seven_day = $script:Kota.seven_day
+            $v.yazildi = $kOlcum
+            $v.olcumZamani = $kOlcum
+            $v.kaynak = 'api'
+            $script:Veri = [pscustomobject]$v
+        }
+    }
 }
 
 function Get-Kaynak {
@@ -1360,7 +1505,11 @@ function Update-Gorunum {
         $yasSn = ([DateTime]::Now - $yazildi).TotalSeconds
         # Masaüstü kaynağı 15 dk'da bir örnekler; ona 5 dk'lık eşik uygulansa
         # sürekli "bayat" görünür. Eşik kaynağa göre.
-        $bayatEsigi = if ((Get-Kaynak) -eq 'masaustu') { $MASAUSTU_BAYAT_SN } else { $BAYAT_SN }
+        $bayatEsigi = switch (Get-Kaynak) {
+            'masaustu' { $MASAUSTU_BAYAT_SN }
+            'api'      { [Math]::Max($API_BAYAT_SN, [int]$script:Ayar.canliYoklama * 3) }
+            default    { $BAYAT_SN }
+        }
         # Alt sınır: ileri tarihli ölçüm "sonsuza kadar taze" sayılmasın.
         $script:VeriTaze = ($yasSn -le $bayatEsigi -and $yasSn -ge -$GELECEK_PAYI_SN)
         # Bayat veri: soluklaştır ve yaşını yaz — güncel sanıp bakmayalım.
@@ -1373,7 +1522,11 @@ function Update-Gorunum {
             $Kok.Opacity = 1.0
             # Masaüstü kaynağı 15 dk'da bir örnekler; ona "canlı" demek yerine
             # gerçek yaşını yaz: "masaüstü · 7 dk önce". Terminal olay bazlı, o "canlı".
-            $Yas.Text = if ((Get-Kaynak) -eq 'masaustu') { '{0} · {1}' -f (T 'KAYNAK_MASAUSTU'), (Format-Yas $yazildi) } else { (T 'CANLI') }
+            $Yas.Text = switch (Get-Kaynak) {
+                'masaustu' { '{0} · {1}' -f (T 'KAYNAK_MASAUSTU'), (Format-Yas $yazildi) }
+                'api'      { '{0} · {1}' -f (T 'KAYNAK_API'), (Format-Yas $yazildi) }
+                default    { (T 'CANLI') }
+            }
             $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8EDF5')
             $Yas.Opacity = 0.45
         }
@@ -1385,6 +1538,14 @@ function Update-Gorunum {
             $Uyari.Text = (T 'VERI_BAYAT')
             $Uyari.Visibility = 'Visible'
         }
+    }
+
+    # Canlı yoklama açık ama yoklayıcı betik yoksa SÖYLE. Menüde seçilebilen
+    # ama sessizce hiçbir şey yapmayan bir ayar, bozuk bir ayardan beterdir:
+    # kullanıcı açar, sayı tazelenmez ve sebebini öğrenemez.
+    if ([int]$script:Ayar.canliYoklama -gt 0 -and -not (Test-Path $YoklayiciBetik)) {
+        $Uyari.Text = (T 'YOKLAMA_BETIK_YOK')
+        $Uyari.Visibility = 'Visible'
     }
 
     # Tüketim hızı yalnızca 5 saatlik pencere için hesaplanıyor.
@@ -1708,6 +1869,47 @@ foreach ($anahtar in $RENKLER.Keys) {
     [void]$menuRenk.Items.Add($mi)
 }
 
+# Canlı yoklama menüsü. İlk kez açılırken AÇIK RIZA isteniyor: ne olduğunu,
+# neyi değiştirdiğini ve jetonun dar yetkili olmadığını anlatan bir onay
+# penceresi. Reddedilirse ayar değişmez.
+function Set-YoklamaSecimi {
+    param([int]$Sn)
+
+    if ($Sn -gt 0 -and -not $script:Ayar.yoklamaOnaylandi) {
+        $cevap = [System.Windows.MessageBox]::Show(
+            ((T 'YOKLAMA_UYARI') -f $Sn), (T 'YOKLAMA_BASLIK'),
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Warning)
+        if ($cevap -ne [System.Windows.MessageBoxResult]::Yes) {
+            Write-Tani 'canli yoklama: kullanici reddetti'
+            foreach ($o in (Get-Ogesi 'MnuYoklama').Items) { $o.IsChecked = ([int]$o.Tag -eq [int]$script:Ayar.canliYoklama) }
+            return
+        }
+        $script:Ayar.yoklamaOnaylandi = $true
+    }
+
+    $script:Ayar.canliYoklama = $Sn
+    $script:SonYoklama = [datetime]::MinValue    # açılır açılmaz ilk yoklama
+    $script:YoklayiciUyarildi = $false
+    $script:Kota = $null
+    $script:KotaSonYazma = [datetime]::MinValue
+    Save-Ayarlar -Ayar $script:Ayar
+    foreach ($o in (Get-Ogesi 'MnuYoklama').Items) { $o.IsChecked = ([int]$o.Tag -eq $Sn) }
+    Write-Tani ("canli yoklama: {0} sn" -f $Sn)
+    Update-Gorunum
+}
+
+$menuYoklama = Get-Ogesi 'MnuYoklama'
+foreach ($sn in $YOKLAMA_SECENEKLERI) {
+    $mi = New-Object System.Windows.Controls.MenuItem
+    $mi.Header = $(if ($sn -eq 0) { T 'YOKLAMA_KAPALI' } else { (T 'YOKLAMA_SN') -f $sn })
+    $mi.Tag = $sn
+    $mi.IsCheckable = $true
+    $mi.IsChecked = ([int]$script:Ayar.canliYoklama -eq $sn)
+    $mi.Add_Click({ param($s, $e) Set-YoklamaSecimi ([int]$s.Tag) })
+    [void]$menuYoklama.Items.Add($mi)
+}
+
 Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsik5') -EsikAlan 'esik5'
 Build-EsikMenusu -Kok (Get-Ogesi 'MnuEsikH') -EsikAlan 'esikH'
 
@@ -1779,7 +1981,8 @@ $win.ContextMenu.Add_Closed({ $menuIzleyici.Stop() })
 $veriTimer = New-Object System.Windows.Threading.DispatcherTimer
 $veriTimer.Interval = [TimeSpan]::FromSeconds(1)
 $veriTimer.Add_Tick({
-    try { Update-Gorunum } catch { Write-Tani ("HATA Update-Gorunum: " + $_.Exception.Message) }
+    try { Invoke-Yoklayici } catch { Write-Tani ("HATA Invoke-Yoklayici: " + $_.Exception.Message) }
+    try { Update-Gorunum }   catch { Write-Tani ("HATA Update-Gorunum: " + $_.Exception.Message) }
 })
 
 # Win+D ("masaüstünü göster") pencereyi küçültür. Yoklama yerine olayı

@@ -84,6 +84,47 @@ yeni tetik gelirse önceki çalışma iptal edilir.
 > örnekleme 60 sn'de bir yazıyor — yenileme de 60 sn olsaydı zamanlama
 > kayması yüzünden örnekler atlanabilirdi.
 
+## İki mod — seçim sizin
+
+Widget **güvenli modda** gelir ve siz bilerek değiştirmedikçe orada kalır.
+Sağ tık → *Canlı yoklama (API)*.
+
+| | **Yalnızca dosya** (varsayılan) | **Canlı yoklama** (isteğe bağlı) |
+|---|---|---|
+| Sayılar nereden | Claude'un zaten diske yazdığı dosyalardan | Resmî kullanım ucundan |
+| OAuth jetonunu okur mu | **Hayır** | Evet |
+| Ağa çıkar mı | **Hayır** | Evet, 60–300 sn'de bir |
+| Gecikme | Terminal oturumunda anında; yalnızca masaüstü kullanılıyorsa 15 dk'ya kadar | ~60 sn |
+
+**Canlı yoklamayı açmak gerçek bir takas, açmadan önce şunu okuyun.** Okuduğu
+OAuth jetonu dar yetkili *değildir* — kapsamları arasında `user:inference`
+vardır, yani jetonu ele geçiren sizin adınıza çıkarım çalıştırabilir ve
+kotanızı harcayabilir. İstenebilecek "yalnızca kullanımı oku" diye bir kapsam
+yok. Kurumsal / iş bilgisayarında önerilmez: kimlik bilgisi tutup zamanlayıcıyla
+dış API'ye çıkan arka plan süreci, uç nokta koruma yazılımlarının işaretlediği
+desendir. Widget bunların hepsini ilk açışta bir onay penceresinde söyler; ayar
+kullanıcı başına hatırlanır ve asla varsayılan olarak açık gelmez.
+
+Ayrım nasıl kurulmuş, ve neden:
+
+- **Widget jetonu hiç görmez.** Yoklama ayrı bir betikte (`kota-yokla.js`)
+  olur, sonucu `kota.json`'a yazar; widget o dosyayı diğer ikisi gibi okur.
+  Sır taşıyan kodun tamamı tek dosyadadır.
+- **Yenileme jetonu hiç okunmaz.** Yalnızca kısa ömürlü erişim jetonu (~24 dk)
+  kullanılır; süresi dolmuşsa istek atılmadan çıkılır. Böylece widget bir jeton
+  yenileme ajanına dönüşmez — incelenen diğer beş izleyicinin hepsi yenileme
+  jetonunu tutuyor. Claude Code kullandıkça erişim jetonunu zaten tazeler;
+  canlı yoklama kendi kimlik döngüsünü kurmak yerine o tazeliğin üstüne biner.
+- **Yalnızca `api.anthropic.com`.** `claude.ai` çerez yolu bilerek
+  kullanılmaz: tam bir web oturumu çerezi ister ve Cloudflare TLS parmak izi
+  kontrolüne takılır; onu aşmak bot tespitini atlatmak demektir.
+- **Jeton hiçbir yere yazılmaz.** Hata yollarında yalnızca HTTP durum kodu
+  tutulur — başlık yok, gövde yok (bir yanıt gövdesi jetonu yankılayabilir).
+
+> **`kota-yokla.js` bu depoda henüz yok.** Menüdeki seçenek duruyor ama betik
+> olmadan widget bunu ekranda söyler ve dosya kaynaklarıyla devam eder.
+> Hiçbir şey sessizce olmaz.
+
 ## Veri ne zaman güncellenir?
 
 İki kaynak, tek kural: **ölçüm zamanı daha yeni olan kazanır.** İkisi de aynı
