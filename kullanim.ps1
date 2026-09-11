@@ -270,14 +270,18 @@ function Save-Ayarlar {
 # ─────────────────────────────────────────────────────────────────────────────
 # Biçimlendirme
 # ─────────────────────────────────────────────────────────────────────────────
+# DİKKAT — [int] YUVARLAR, KIRPMAZ. [int](3.55) = 4, [int](119/60) = 2.
+# Süre bileşenlerini ayırırken bu bir saat fazla gösteriyordu: 3 sa 32 dk
+# kalan bir pencere "4 sa 32 dk" olarak yazılıyordu (dakika ≥ 30 olduğu her
+# durumda). Saat/gün bileşeni DAİMA [Math]::Floor ile alınmalı.
 function Format-Kalan {
     param([Nullable[datetime]]$Sifirlanma)
     if ($null -eq $Sifirlanma) { return '' }
     $fark = $Sifirlanma - [DateTime]::Now
     if ($fark.TotalSeconds -le 0) { return (T 'SIFIRLANDI') }
     if ($fark.TotalMinutes -lt 1) { return (T 'BIRAZDAN') }
-    if ($fark.TotalHours -lt 1)   { return ((T 'KALAN_DK') -f [int]$fark.TotalMinutes) }
-    return ((T 'KALAN_SADK') -f [int]$fark.TotalHours, ($fark.Minutes))
+    if ($fark.TotalHours -lt 1)   { return ((T 'KALAN_DK') -f [int][Math]::Floor($fark.TotalMinutes)) }
+    return ((T 'KALAN_SADK') -f [int][Math]::Floor($fark.TotalHours), ($fark.Minutes))
 }
 
 # Bir ölçüm zamanı damgası kabul edilebilir mi? Tek ölçüt: makul bir paydan
@@ -295,9 +299,9 @@ function Format-Yas {
     # İleri tarihli damga "az önce" diye okunmasın — sebebini söyle.
     if ($fark.TotalSeconds -lt -$GELECEK_PAYI_SN) { return (T 'YAS_ILERI') }
     if ($fark.TotalSeconds -lt 90)  { return (T 'YAS_SIMDI') }
-    if ($fark.TotalMinutes -lt 60)  { return ((T 'YAS_DK') -f [int]$fark.TotalMinutes) }
-    if ($fark.TotalHours -lt 24)    { return ((T 'YAS_SA') -f [int]$fark.TotalHours) }
-    return ((T 'YAS_GUN') -f [int]$fark.TotalDays)
+    if ($fark.TotalMinutes -lt 60)  { return ((T 'YAS_DK') -f [int][Math]::Floor($fark.TotalMinutes)) }
+    if ($fark.TotalHours -lt 24)    { return ((T 'YAS_SA') -f [int][Math]::Floor($fark.TotalHours)) }
+    return ((T 'YAS_GUN') -f [int][Math]::Floor($fark.TotalDays))
 }
 
 # Bar rengi. Sadece doluluğa değil TÜKETİM HIZINA da bakar: pencere
@@ -318,7 +322,7 @@ function Get-BarRengi {
 function Format-Sure {
     param([int]$Dakika)
     if ($Dakika -lt 60) { return ((T 'SURE_DK') -f $Dakika) }
-    return ((T 'SURE_SADK') -f [int]($Dakika / 60), ($Dakika % 60))
+    return ((T 'SURE_SADK') -f [int][Math]::Floor($Dakika / 60), ($Dakika % 60))
 }
 
 # Gün kısaltmaları dile göre. Fonksiyon olarak duruyor çünkü $DIL bu satırdan
@@ -1070,6 +1074,33 @@ function Invoke-Yoklayici {
     }
 }
 
+# "Bu hızla ne kadar sürede biter?"
+#
+# Hızın kendisi (puan/dk) kaynaktan bağımsızdır, ama kalan süre GÖSTERİLEN
+# yüzdeye bağlıdır. Kaynaklar farklı olabiliyor: hız masaüstü serisinden
+# türerken ekrandaki yüzde API'den gelebiliyor. Bu durumda kaydedilmiş
+# bitisDk yanlış referansa göre hesaplanmış olur — ekranda %44 yazarken
+# tahmin %40 üzerinden yapılmış olurdu.
+#
+# Çözüm: bitisDk'yı okuma anında, ekrandaki yüzdeyle yeniden hesapla.
+# yuzdeDk yoksa (eski dosya biçimi) kaydedilmiş değere düşülür.
+function Get-BitisDakikasi {
+    if ($null -eq $script:Veri -or -not (Test-Ozellik $script:Veri 'hiz')) { return $null }
+    $h = $script:Veri.hiz
+
+    $kayitli = if (Test-Ozellik $h 'bitisDk') { [int]$h.bitisDk } else { $null }
+    if (-not (Test-Ozellik $h 'yuzdeDk')) { return $kayitli }
+
+    $yuzdeDk = [double]$h.yuzdeDk
+    if ($yuzdeDk -le 0.01) { return $kayitli }
+    if (-not (Test-Ozellik $script:Veri 'five_hour')) { return $kayitli }
+    if ($null -eq $script:Veri.five_hour.used_percentage) { return $kayitli }
+
+    $kalan = 100.0 - [double]$script:Veri.five_hour.used_percentage
+    if ($kalan -le 0) { return 0 }
+    return [int][Math]::Round($kalan / $yuzdeDk)
+}
+
 # Kaynaklar aynı API'nin fotoğrafı; ÖLÇÜM ZAMANI daha yeni olan kazanır.
 # Masaüstü kazanırsa yüzdeler oradan gelir; sıfırlanma saati yalnızca
 # statusLine'ın gördüğü pencere hâlâ açıksa korunur — pencere dönmüşse
@@ -1318,19 +1349,35 @@ function Test-Esik {
 function Update-Hiz {
     param($BitisDk)
 
-    $HizUyari.Visibility = 'Collapsed'
-    if ($null -eq $BitisDk -or $null -eq $script:Veri) { return }
+    $metin = Get-HizUyarisi $BitisDk
+
+    $HizUyari.Visibility = $(if ($null -eq $metin) { 'Collapsed' } else { 'Visible' })
+    if ($null -ne $metin) { $HizUyari.Text = $metin }
+
+    # Kart dışındaki yerleşimlerde bu satır için yer yok; orada barın neden
+    # kırmızıya döndüğünü araç ipucu anlatsın. Yoksa kırmızı sebepsiz görünüyor
+    # — kullanıcı "%42'de neden kırmızı?" diye sormak zorunda kalıyor.
+    foreach ($kapsul in @($SeritKapsul, $KompaktKapsul, $TerminalKapsul)) {
+        $kapsul.ToolTip = $metin
+    }
+    Write-Tani ("hiz: bitisDk={0} uyari={1}" -f $BitisDk, $(if ($null -eq $metin) { 'yok' } else { $metin }))
+}
+
+# Uyarı metni, yoksa $null. Tek koşul: pencere SIFIRLANMADAN ÖNCE bitecek
+# olması; aksi hâlde "bu hızla biter" demek gereksiz korkutur.
+function Get-HizUyarisi {
+    param($BitisDk)
+
+    if ($null -eq $BitisDk -or $null -eq $script:Veri) { return $null }
+    if (-not (Test-Ozellik $script:Veri 'five_hour')) { return $null }
 
     $sifirlanma = ConvertFrom-UnixSaniye $script:Veri.five_hour.resets_at
-    if ($null -eq $sifirlanma) { return }
+    if ($null -eq $sifirlanma) { return $null }
 
     $kalanDk = ($sifirlanma - [DateTime]::Now).TotalMinutes
-    # Uyarı yalnızca limit sıfırlanmadan ÖNCE bitecekse anlamlı; aksi hâlde
-    # "bu hızla biter" demek gereksiz korkutur.
-    if ($kalanDk -le 0 -or [int]$BitisDk -ge $kalanDk) { return }
+    if ($kalanDk -le 0 -or [int]$BitisDk -ge $kalanDk) { return $null }
 
-    $HizUyari.Text = ((T 'HIZ_UYARI') -f (Format-Sure ([int]$BitisDk)))
-    $HizUyari.Visibility = 'Visible'
+    return ((T 'HIZ_UYARI') -f (Format-Sure ([int]$BitisDk)))
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1549,10 +1596,7 @@ function Update-Gorunum {
     }
 
     # Tüketim hızı yalnızca 5 saatlik pencere için hesaplanıyor.
-    $bitisDk = $null
-    if ($script:Veri.PSObject.Properties.Name -contains 'hiz' -and $null -ne $script:Veri.hiz) {
-        $bitisDk = [int]$script:Veri.hiz.bitisDk
-    }
+    $bitisDk = Get-BitisDakikasi
 
     Update-Bar $script:Veri.five_hour $Yuzde5 $Sifir5 $Dolgu5 $bitisDk
     Update-Bar $script:Veri.seven_day $YuzdeH $SifirH $DolguH
