@@ -157,7 +157,25 @@ async function main() {
     clearTimeout(sayac);
   }
 
-  if (!yanit.ok) { durumYaz('http', yanit.status); return; }
+  if (!yanit.ok) {
+    /* 429'da sunucunun soyledigi sureye UYULUR. Ucun ucuncu-parti yoklamayi
+       sinirladigi olculdu; geri cekilmeden 60 sn'de bir vurmak hem ise
+       yaramiyor hem de kaba. Retry-After saniye ya da HTTP-tarih olabilir. */
+    let bekle = null;
+    if (yanit.status === 429) {
+      const ham = yanit.headers.get('retry-after');
+      if (ham) {
+        const sn = Number(ham);
+        if (Number.isFinite(sn) && sn > 0) bekle = Math.round(sn);
+        else {
+          const t = Date.parse(ham);
+          if (!isNaN(t)) bekle = Math.max(0, Math.round((t - Date.now()) / 1000));
+        }
+      }
+    }
+    jsonYaz({ yazildi: Date.now(), hata: 'http', http: yanit.status, tekrarSn: bekle });
+    return;
+  }
 
   let d;
   try { d = await yanit.json(); } catch (e) { durumYaz('bozuk-yanit'); return; }

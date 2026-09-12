@@ -206,6 +206,7 @@ $BaslangicKisayolu = if ($env:KULLANIM_BASLANGIC_YOL) { $env:KULLANIM_BASLANGIC_
                      else { Join-Path ([Environment]::GetFolderPath('Startup')) $KISAYOL_ADI }
 $API_BAYAT_SN = 300     # API ölçümü bu kadar sonra bayat sayılır
 $YOKLAMA_SECENEKLERI = @(0, 60, 120, 300)   # 0 = kapalı
+$YOKLAMA_TAVAN_SN = 900   # geri çekilmenin üst sınırı
 
 $OLAY_OMUR_SN  = 900    # olay satırı 15 dk sonra kaybolur
 $YANIP_SONME_SN = 12    # ilk 12 saniye dikkat çeksin diye yanıp söner
@@ -829,6 +830,7 @@ $script:Kota = $null                  # canlı yoklama sonucu (opsiyonel kaynak)
 $script:KotaSonYazma = [datetime]::MinValue
 $script:SonYoklama = [datetime]::MinValue
 $script:YoklayiciUyarildi = $false
+$script:YoklamaAralik = 0     # yürürlükteki aralık (geri çekilmeyle büyür)
 $script:HizKisa = $null               # dar yerleşimler için kısa hız uyarısı
 $script:IcHata = $false               # yakalanmış iç hata oldu mu (kalıcı)
 $script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
@@ -1092,7 +1094,26 @@ function Read-Kota {
         $script:KotaSonYazma = $bilgi.LastWriteTime
 
         if (Test-Ozellik $j 'hata') {
-            Write-Tani ("kota: yoklayici hata bildirdi -> " + [string]$j.hata)
+            # UYARLANABİLİR GERİ ÇEKİLME
+            #
+            # Uç nokta üçüncü-parti yoklamayı sınırlıyor: 60 saniyede bir
+            # vurmak 429 dönüyor ve hiçbir veri gelmiyor. Her hatada aralık
+            # ikiye katlanıyor, tavanda duruyor; ilk başarılı yoklamada
+            # kullanıcının seçtiği tabana geri dönüyor.
+            #
+            # Sunucu Retry-After söylediyse ONA uyulur — bizim ikiye
+            # katlamamızdan daha bilgili bir sayıdır.
+            $taban = [int]$script:Ayar.canliYoklama
+            $yeni = if ($script:YoklamaAralik -lt $taban) { $taban }
+                    else { [Math]::Min($script:YoklamaAralik * 2, $YOKLAMA_TAVAN_SN) }
+            if ((Test-Ozellik $j 'tekrarSn') -and [int]$j.tekrarSn -gt 0) {
+                $yeni = [Math]::Max($yeni, [Math]::Min([int]$j.tekrarSn, $YOKLAMA_TAVAN_SN))
+            }
+            if ($yeni -ne $script:YoklamaAralik) {
+                Write-Kayit ("canli yoklama geri cekildi: {0} sn (hata: {1}{2})" -f `
+                    $yeni, [string]$j.hata, $(if (Test-Ozellik $j 'http') { ' ' + $j.http } else { '' }))
+            }
+            $script:YoklamaAralik = $yeni
             $script:Kota = $null; return
         }
         $olcum = if (Test-Ozellik $j 'olcumZamani') { [int64]$j.olcumZamani } else { $null }
@@ -1104,6 +1125,11 @@ function Read-Kota {
             $script:Kota = $null; return
         }
         $script:Kota = $j
+        # Temiz yanıt: geri çekilmeyi bırak, tabana dön.
+        if ($script:YoklamaAralik -gt [int]$script:Ayar.canliYoklama) {
+            Write-Kayit ("canli yoklama tabana dondu: {0} sn" -f [int]$script:Ayar.canliYoklama)
+        }
+        $script:YoklamaAralik = [int]$script:Ayar.canliYoklama
         Write-Tani ("kota: olcum={0} f5={1}" -f $olcum, $j.five_hour.used_percentage)
     } catch {
         Write-Tani ("kota: okuma hatasi " + $_.Exception.Message)
@@ -1115,9 +1141,10 @@ function Read-Kota {
 # gizli başlatılıyor (Start-Process kısa ömürlü konsol uygulamalarında
 # göz kırpma üretiyor).
 function Invoke-Yoklayici {
-    $sn = [int]$script:Ayar.canliYoklama
-    if ($sn -le 0) { return }
-    if (([DateTime]::Now - $script:SonYoklama).TotalSeconds -lt $sn) { return }
+    $taban = [int]$script:Ayar.canliYoklama
+    if ($taban -le 0) { return }
+    if ($script:YoklamaAralik -lt $taban) { $script:YoklamaAralik = $taban }
+    if (([DateTime]::Now - $script:SonYoklama).TotalSeconds -lt $script:YoklamaAralik) { return }
 
     if (-not (Test-Path $YoklayiciBetik)) {
         if (-not $script:YoklayiciUyarildi) {
@@ -2023,6 +2050,7 @@ function Set-YoklamaSecimi {
 
     $script:Ayar.canliYoklama = $Sn
     $script:SonYoklama = [datetime]::MinValue    # açılır açılmaz ilk yoklama
+    $script:YoklamaAralik = $Sn                  # geri çekilmeyi sıfırla
     $script:YoklayiciUyarildi = $false
     $script:Kota = $null
     $script:KotaSonYazma = [datetime]::MinValue
