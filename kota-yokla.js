@@ -106,9 +106,23 @@ function jsonYaz(veri) {
   }
 }
 
-/* YALNIZCA durum kodu. Govde ve basliklar kaydedilmez (tasarim karari 3). */
+/* YALNIZCA durum kodu yazilir; govde ve basliklar asla (tasarim karari 3).
+   Ayrica hatanin YERELLIGI bildirilir.
+
+   Ayrim widget icin onemli: ag hatasi / 429, uzak ucu idareli kullanmayi
+   gerektirir (ustel geri cekilme). Ama 'jeton-suresi-dolmus' gibi yerel bir
+   durumda HIC ISTEK ATILMIYOR -- idare edilecek bir sey yok ve durum her an
+   kendiliginden duzelebilir (Claude Code jetonu tazeleyince). Orada geri
+   cekilmek, tazelemeyi gec fark etmekten baska ise yaramaz. */
+const YEREL_HATALAR = ['kimlik-yok', 'jeton-yok', 'jeton-suresi-dolmus'];
+
 function durumYaz(hata, kod) {
-  jsonYaz({ yazildi: Date.now(), hata: hata, http: kod === undefined ? null : kod });
+  jsonYaz({
+    yazildi: Date.now(),
+    hata: hata,
+    http: kod === undefined ? null : kod,
+    yerel: YEREL_HATALAR.indexOf(hata) !== -1,
+  });
 }
 
 /* Yanittaki bir pencereyi widget'in bekledigi bicime cevirir. Uc, yuzdeyi

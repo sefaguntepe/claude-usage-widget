@@ -1129,6 +1129,22 @@ function Read-Kota {
             # Sunucu Retry-After söylediyse ONA uyulur — bizim ikiye
             # katlamamızdan daha bilgili bir sayıdır.
             $taban = [int]$script:Ayar.canliYoklama
+
+            # YEREL hatada geri ÇEKİLME: jeton süresi dolmuş, kimlik dosyası
+            # yok gibi durumlarda yoklayıcı hiç istek atmıyor — idare edilecek
+            # bir uzak çağrı yok. Üstel geri çekilme burada yalnızca zarar
+            # veriyordu: durum her an kendiliğinden düzelebilir (Claude Code
+            # kullanıldıkça jetonu tazeler) ve 900 saniyeye çıkmış bir aralık
+            # bunu 15 dakika geç fark eder. Kullanıcının seçtiği aralıkta kal.
+            if ((Test-Ozellik $j 'yerel') -and $j.yerel) {
+                if ($script:YoklamaAralik -ne $taban) {
+                    Write-Kayit ("canli yoklama tabana alindi ({0} sn): yerel durum, ag istegi yok ({1})" -f `
+                        $taban, [string]$j.hata)
+                }
+                $script:YoklamaAralik = $taban
+                $script:Kota = $null; return
+            }
+
             $yeni = if ($script:YoklamaAralik -lt $taban) { $taban }
                     else { [Math]::Min($script:YoklamaAralik * 2, $YOKLAMA_TAVAN_SN) }
             if ((Test-Ozellik $j 'tekrarSn') -and [int]$j.tekrarSn -gt 0) {
