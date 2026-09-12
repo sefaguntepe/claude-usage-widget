@@ -1125,11 +1125,24 @@ function Read-Kota {
             $script:Kota = $null; return
         }
         $script:Kota = $j
-        # Temiz yanıt: geri çekilmeyi bırak, tabana dön.
-        if ($script:YoklamaAralik -gt [int]$script:Ayar.canliYoklama) {
-            Write-Kayit ("canli yoklama tabana dondu: {0} sn" -f [int]$script:Ayar.canliYoklama)
+
+        # Temiz yanıtta KADEMELİ inil, tabana atlama.
+        #
+        # Önce her başarıda doğrudan tabana dönülüyordu; üretimde bu 60↔120
+        # arasında sürekli salınım üretti (günlükte onlarca "geri çekildi /
+        # tabana döndü" çifti). Uç nokta 60 saniyeyi kaldırmıyor, ama biz her
+        # seferinde yeniden deneyip yeniden 429 yiyorduk.
+        #
+        # Yarılayarak inmek sürdürülebilir hıza oturuyor: hata varken hızla
+        # seyrekleş, düzelince yavaşça sıklaş.
+        $taban = [int]$script:Ayar.canliYoklama
+        if ($script:YoklamaAralik -gt $taban) {
+            $yeni = [Math]::Max($taban, [int]($script:YoklamaAralik / 2))
+            if ($yeni -ne $script:YoklamaAralik) {
+                Write-Kayit ("canli yoklama siklasti: {0} sn" -f $yeni)
+            }
+            $script:YoklamaAralik = $yeni
         }
-        $script:YoklamaAralik = [int]$script:Ayar.canliYoklama
         Write-Tani ("kota: olcum={0} f5={1}" -f $olcum, $j.five_hour.used_percentage)
     } catch {
         Write-Tani ("kota: okuma hatasi " + $_.Exception.Message)
@@ -2222,7 +2235,21 @@ $win.Dispatcher.add_UnhandledException({
     param($k, $o)
     try {
         Write-Kayit ('YAKALANMAMIS HATA: ' + $o.Exception.GetType().Name + ' - ' + $o.Exception.Message)
-        Write-Kayit ('  yigin: ' + ($o.Exception.StackTrace -split "`n" | Select-Object -First 3 | ForEach-Object { $_.Trim() }) -join ' | ')
+
+        # .NET yığın izi burada işe yaramıyor: yalnızca PowerShell yorumlayıcı
+        # çerçeveleri görünüyor, betiğin neresi olduğu görünmüyor. Asıl bilgi
+        # ErrorRecord.InvocationInfo'da — satır numarası ve kaynak satırın
+        # kendisi. Onsuz "null üzerinde metot çağrıldı" mesajı 2000 satırlık
+        # bir dosyada hiçbir yere işaret etmiyor.
+        $ir = $null
+        if ($o.Exception -is [System.Management.Automation.IContainsErrorRecord]) {
+            $ir = $o.Exception.ErrorRecord.InvocationInfo
+        }
+        if ($null -ne $ir) {
+            Write-Kayit ('  satir {0}: {1}' -f $ir.ScriptLineNumber, $ir.Line.Trim())
+        } else {
+            Write-Kayit ('  yigin: ' + (($o.Exception.StackTrace -split "`n" | Select-Object -First 2 | ForEach-Object { $_.Trim() }) -join ' | '))
+        }
         # Metni BURADA yazmak işe yaramaz: Update-Gorunum saniyede bir çalışıp
         # uyarı alanını sıfırlıyor. Bayrağı kaldır, gösterimi o üstlensin.
         $script:IcHata = $true
