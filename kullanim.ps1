@@ -157,6 +157,11 @@ $VeriKlasor  = Join-Path $env:APPDATA 'ClaudeKullanim'
 # Dosya sınırlı: 300 satırı geçince başı atılır, sessizce büyümez.
 $GunlukDosya = Join-Path $VeriKlasor 'gunluk.txt'
 
+# İkinci kopyanın çalışan kopyaya bıraktığı "beni göster" notu.
+# Dosya tabanlı çünkü widget zaten saniyede bir dosya okuyor; bunun için
+# ayrı bir IPC kanalı kurmak gereksiz karmaşıklık olurdu.
+$CagriDosya = Join-Path $VeriKlasor 'cagri.tmp'
+
 function Write-Kayit {
     param([string]$Mesaj)
     try {
@@ -264,7 +269,12 @@ if (-not $script:TekOrnek.WaitOne(0)) {
     # sonra tanımlanıyor ve ErrorActionPreference='Stop' altında tanımsız komut
     # süreci düşürür. Betik yukarıdan aşağı çalışır; erken bloklarda yalnızca
     # o noktaya kadar tanımlanmış şeyler kullanılabilir.
-    Write-Kayit 'ikinci kopya: zaten calisiyor, cikildi'
+    # SESSİZCE ÇIKMAK YETMİYOR — bu tam olarak "açtım, açılmadı" gibi
+    # görünüyor. Kullanıcı kısayola basmışsa widget'ı GÖRMEK istiyordur;
+    # pencere başka pencerelerin altında ya da ekran dışında olabilir.
+    # Çalışan kopyaya not bırak, o kendini göstersin.
+    try { Set-Content -Path $CagriDosya -Value ([DateTimeOffset]::Now.ToUnixTimeMilliseconds()) -Encoding UTF8 } catch { }
+    Write-Kayit 'ikinci kopya: zaten calisiyor, calisana "kendini goster" notu birakildi'
     exit 0
 }
 
@@ -846,6 +856,7 @@ $script:YoklamaAralik = 0     # yürürlükteki aralık (geri çekilmeyle büyü
 $script:HizKisa = $null               # dar yerleşimler için kısa hız uyarısı
 $script:IcHata = $false               # yakalanmış iç hata oldu mu (kalıcı)
 $script:Baslangic = [DateTime]::Now   # kalp atışı için
+$script:VurguBitis = $null            # "kendini göster" vurgusunun bitiş anı
 $script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
 $script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
@@ -1160,6 +1171,53 @@ function Read-Kota {
     } catch {
         Write-Tani ("kota: okuma hatasi " + $_.Exception.Message)
     }
+}
+
+# İkinci kopyadan gelen "kendini göster" çağrısına cevap.
+#
+# Yapılan iki şey: ekran dışındaysa görünür bir yere al, ve birkaç saniye
+# öne çıkar. Konumu KORUYORUZ — kullanıcı widget'ı bilerek bir yere koymuş
+# olabilir; yalnızca gerçekten görünmez durumdaysa taşıyoruz.
+function Invoke-Cagri {
+    if (-not (Test-Path $CagriDosya)) { return }
+    try { Remove-Item $CagriDosya -Force } catch { return }
+
+    $ca = [System.Windows.SystemParameters]::WorkArea
+    $tamamenDisarida = ($win.Left + $win.ActualWidth -lt $ca.Left + 20) -or
+                       ($win.Left -gt $ca.Right - 20) -or
+                       ($win.Top + $win.ActualHeight -lt $ca.Top + 20) -or
+                       ($win.Top -gt $ca.Bottom - 20)
+    if ($tamamenDisarida) {
+        Write-Kayit 'cagri: pencere ekran disindaydi, varsayilan konuma alindi'
+        if ($script:Ayar.tema -eq 'serit') { Set-SeritVarsayilanKonumu } else { Set-VarsayilanKonum }
+        $a = Get-KonumAnahtari
+        $script:Ayar.($a[0]) = $script:KonumSol
+        $script:Ayar.($a[1]) = $script:KonumUst
+        Save-Ayarlar -Ayar $script:Ayar
+    } else {
+        Write-Kayit 'cagri: pencere one cikarildi'
+    }
+
+    # Göze çarpsın: birkaç saniye en üstte dursun, sonra temanın kendi
+    # davranışına geri dönsün.
+    # DİKKAT: yalnızca Topmost'u açmak YETMEZ. WM_WINDOWPOSCHANGING kancası
+    # kart temasında her z-düzeni değişiminde pencereyi HWND_BOTTOM'a geri
+    # itiyor ve Topmost'u anında eziyor. Vurgu süresince kancayı da kapatmak
+    # gerekiyor — ilk denemede bu unutuldu ve vurgu sessizce hiç görünmedi.
+    $script:VurguBitis = [DateTime]::Now.AddSeconds(4)
+    [ZDuzeni]::Dipte = $false
+    $win.Topmost = $true
+    $Kok.Opacity = 1.0
+}
+
+# Vurgu süresi dolunca temanın normal z-düzeni davranışına dön.
+function Update-Vurgu {
+    if ($null -eq $script:VurguBitis) { return }
+    if ([DateTime]::Now -lt $script:VurguBitis) { return }
+    $script:VurguBitis = $null
+    # Temanın kendi davranışına geri dön: kancayı ve Topmost'u birlikte.
+    [ZDuzeni]::Dipte = $YERLESIMLER[$script:Ayar.tema].Dipte
+    $win.Topmost = -not $YERLESIMLER[$script:Ayar.tema].Dipte
 }
 
 # Yoklayıcıyı tetikler. Jetonu okuyan ve ağa çıkan TEK yer o betiktir; widget
@@ -2210,6 +2268,8 @@ $win.ContextMenu.Add_Closed({ $menuIzleyici.Stop() })
 $veriTimer = New-Object System.Windows.Threading.DispatcherTimer
 $veriTimer.Interval = [TimeSpan]::FromSeconds(1)
 $veriTimer.Add_Tick({
+    try { Invoke-Cagri }     catch { Write-Tani ("HATA Invoke-Cagri: " + $_.Exception.Message) }
+    try { Update-Vurgu }     catch { Write-Tani ("HATA Update-Vurgu: " + $_.Exception.Message) }
     try { Invoke-Yoklayici } catch { Write-Tani ("HATA Invoke-Yoklayici: " + $_.Exception.Message) }
     try { Update-Gorunum }   catch { Write-Tani ("HATA Update-Gorunum: " + $_.Exception.Message) }
 })
