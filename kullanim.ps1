@@ -137,6 +137,7 @@ $GWL_EXSTYLE       = -20
 $WS_EX_TOOLWINDOW  = 0x00000080
 $WS_EX_NOACTIVATE  = 0x08000000
 $HWND_BOTTOM       = [IntPtr]1     # 8 degil
+$HWND_TOPMOST      = [IntPtr](-1)
 $SW_SHOWNOACTIVATE = 4
 $SWP_NOSIZE        = 0x0001
 $SWP_NOMOVE        = 0x0002
@@ -1171,6 +1172,44 @@ function Read-Kota {
     } catch {
         Write-Tani ("kota: okuma hatasi " + $_.Exception.Message)
     }
+}
+
+# ŞERİT GÖREV ÇUBUĞUNUN ALTINDA KALIYOR
+#
+# Şerit teması çubuğun ÜSTÜNDE durmalı. İkisi de topmost, ama topmost bandının
+# kendi içinde bir sıra var: explorer çubuğu öne aldığında (Başlat'a basmak,
+# çubuğa tıklamak, explorer'ın yeniden başlaması) biz altında kalıyoruz.
+#
+# WM_WINDOWPOSCHANGING kancası burada yardım edemiyor: o mesaj yalnızca BİZİM
+# konumumuz değişirken geliyor, başka bir pencere kendini öne aldığında değil.
+# WPF'in `$win.Topmost = $true` ataması da işe yaramıyor — değer zaten $true
+# olduğu için hiçbir SetWindowPos çağrısı üretmiyor.
+#
+# Kör yoklama yapmıyoruz (1.2.0'daki 2 saniyelik SetWindowPos döngüsü masaüstü
+# sağ tık menüsünü bozmuştu). Bunun yerine ÖLÇÜYORUZ: kendi merkezimizdeki
+# piksel bize mi ait? Değilse örtülmüşüz, yalnızca o zaman öne alıyoruz.
+function Update-SeritUstte {
+    if ($script:Ayar.tema -ne 'serit') { return }
+    if ($null -ne $script:VurguBitis) { return }      # vurgu zaten üstte tutuyor
+    if ($win.ActualWidth -le 0 -or $win.ActualHeight -le 0) { return }
+
+    $hwnd = Get-Tutamac
+    if ($hwnd -eq [IntPtr]::Zero) { return }
+
+    # WindowFromPoint FİZİKSEL piksel ister; konumlarımız DIP.
+    $olcek = Get-DpiOlcegi
+    $n = New-Object 'Widget.Win32+POINT'
+    $n.X = [int]((($script:KonumSol + $win.ActualWidth  / 2)) * $olcek)
+    $n.Y = [int]((($script:KonumUst  + $win.ActualHeight / 2)) * $olcek)
+
+    $ust = [Widget.Win32]::WindowFromPoint($n)
+    if ($ust -eq [IntPtr]::Zero) { return }
+    $sahip = 0
+    [void][Widget.Win32]::GetWindowThreadProcessId($ust, [ref]$sahip)
+    if ($sahip -eq $PID) { return }                    # zaten üstteyiz
+
+    [void][Widget.Win32]::SetWindowPos($hwnd, $HWND_TOPMOST, 0, 0, 0, 0,
+        ($SWP_NOMOVE -bor $SWP_NOSIZE -bor $SWP_NOACTIVATE))
 }
 
 # İkinci kopyadan gelen "kendini göster" çağrısına cevap.
@@ -2273,7 +2312,8 @@ $win.ContextMenu.Add_Closed({ $menuIzleyici.Stop() })
 $veriTimer = New-Object System.Windows.Threading.DispatcherTimer
 $veriTimer.Interval = [TimeSpan]::FromSeconds(1)
 $veriTimer.Add_Tick({
-    try { Invoke-Cagri }     catch { Write-Tani ("HATA Invoke-Cagri: " + $_.Exception.Message) }
+    try { Invoke-Cagri }       catch { Write-Tani ("HATA Invoke-Cagri: " + $_.Exception.Message) }
+    try { Update-SeritUstte }  catch { Write-Tani ("HATA Update-SeritUstte: " + $_.Exception.Message) }
     try { Update-Vurgu }     catch { Write-Tani ("HATA Update-Vurgu: " + $_.Exception.Message) }
     try { Invoke-Yoklayici } catch { Write-Tani ("HATA Invoke-Yoklayici: " + $_.Exception.Message) }
     try { Update-Gorunum }   catch { Write-Tani ("HATA Update-Gorunum: " + $_.Exception.Message) }
