@@ -1182,11 +1182,16 @@ function Invoke-Cagri {
     if (-not (Test-Path $CagriDosya)) { return }
     try { Remove-Item $CagriDosya -Force } catch { return }
 
-    $ca = [System.Windows.SystemParameters]::WorkArea
-    $tamamenDisarida = ($win.Left + $win.ActualWidth -lt $ca.Left + 20) -or
-                       ($win.Left -gt $ca.Right - 20) -or
-                       ($win.Top + $win.ActualHeight -lt $ca.Top + 20) -or
-                       ($win.Top -gt $ca.Bottom - 20)
+    # ÖLÇÜT TÜM EKRAN, çalışma alanı DEĞİL. Şerit teması görev çubuğunun
+    # üstünde, yani bilerek çalışma alanının DIŞINDA duruyor; WorkArea ile
+    # ölçünce kullanıcının kendi yerleştirdiği şerit "ekran dışı" sayılıp
+    # varsayılan konuma taşınıyordu — düzeltirken bozmak tam olarak bu.
+    $eg = [System.Windows.SystemParameters]::PrimaryScreenWidth
+    $ey = [System.Windows.SystemParameters]::PrimaryScreenHeight
+    $tamamenDisarida = ($win.Left + $win.ActualWidth -lt 20) -or
+                       ($win.Left -gt $eg - 20) -or
+                       ($win.Top + $win.ActualHeight -lt 20) -or
+                       ($win.Top -gt $ey - 20)
     if ($tamamenDisarida) {
         Write-Kayit 'cagri: pencere ekran disindaydi, varsayilan konuma alindi'
         if ($script:Ayar.tema -eq 'serit') { Set-SeritVarsayilanKonumu } else { Set-VarsayilanKonum }
