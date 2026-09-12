@@ -245,6 +245,18 @@ $kilitAdi = 'Local\ClaudeUsageWidget_' + (
         [Text.Encoding]::UTF8.GetBytes($VeriKlasor.ToLowerInvariant())
     ) | ForEach-Object { $_.ToString('x2') }) -join '')
 Write-Kayit 'baslatildi'
+
+# Dispatcher yakalayıcısı yalnızca UI iş parçacığını kapsıyor. Arka plan
+# iş parçacığındaki bir istisna (COM geri çağırması, zamanlayıcı havuzu)
+# .NET'te süreci DOĞRUDAN sonlandırır — engellenemez, ama kaydedilebilir.
+# Bu satır olmadan böyle bir ölüm günlükte hiçbir iz bırakmıyordu.
+[AppDomain]::CurrentDomain.add_UnhandledException({
+    param($k, $o)
+    try {
+        $x = $o.ExceptionObject
+        Write-Kayit ('OLUMCUL (UI disi): ' + $x.GetType().Name + ' - ' + $x.Message)
+    } catch { }
+})
 $script:TekOrnek = New-Object System.Threading.Mutex($false, $kilitAdi)
 if (-not $script:TekOrnek.WaitOne(0)) {
     # Zaten açık. Sessizce çık — ikinci pencere açmak faydadan çok zarar.
@@ -833,6 +845,7 @@ $script:YoklayiciUyarildi = $false
 $script:YoklamaAralik = 0     # yürürlükteki aralık (geri çekilmeyle büyür)
 $script:HizKisa = $null               # dar yerleşimler için kısa hız uyarısı
 $script:IcHata = $false               # yakalanmış iç hata oldu mu (kalıcı)
+$script:Baslangic = [DateTime]::Now   # kalp atışı için
 $script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
 $script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
@@ -2260,6 +2273,7 @@ $win.Dispatcher.add_UnhandledException({
 $win.Add_ContentRendered({
     Set-MasaustuSeviyesi
     (Get-Ogesi 'MnuBaslangic').IsChecked = Test-Baslangic
+    $nabizTimer.Start()
     Set-Renkler $script:Ayar.renk -Kaydetme   # kayıtlı palet
     Set-Tema $script:Ayar.tema -Kaydetme      # kayıtlı yerleşim
     $veriTimer.Start()
@@ -2349,8 +2363,28 @@ $win.Add_ContentRendered({
     # StrictMode altında betik hiç başlamazdı.
 })
 
+# KALP ATIŞI
+#
+# Günlükte "kapandi" satırı varsa pencere düzgün kapandı (menüden ya da
+# koddan). Satır YOKSA süreç dışarıdan öldürülmüş ya da sert çökmüş demektir —
+# ama ne zaman olduğunu bilemezdik. Yarım saatlik bir nabız, ölüm anını
+# 30 dakikalık bir pencereye sıkıştırıyor ve "günlük burada bitiyor" ifadesini
+# kanıta çeviriyor.
+$nabizTimer = New-Object System.Windows.Threading.DispatcherTimer
+# KULLANIM_NABIZ_DK yalnizca test icin: nabzi hizlandirip tick'in gercekten
+# calistigini gorebilmek. Uretimde 30 dakika.
+$nabizDk = if ($env:KULLANIM_NABIZ_DK) { [double]$env:KULLANIM_NABIZ_DK } else { 30.0 }
+$nabizTimer.Interval = [TimeSpan]::FromMinutes($nabizDk)
+$nabizTimer.Add_Tick({
+    try {
+        $dk = [int]([DateTime]::Now - $script:Baslangic).TotalMinutes
+        Write-Kayit ("calisiyor ({0} dk)" -f $dk)
+    } catch { }
+})
+
 $win.Add_Closed({
     $veriTimer.Stop()
+    $nabizTimer.Stop()
     # Neden kapandığını kaydet: "açtım ama kapandı" şikâyetinde tek kanıt bu.
     # Süreç dışarıdan öldürülürse bu satır yazılmaz — o da bir bilgidir.
     Write-Kayit 'pencere kapandi (Close cagrildi)'
