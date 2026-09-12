@@ -150,7 +150,7 @@ write to disk.
 
   ![Layouts](docs/layouts.png)
 
-- **Five colour palettes** — right-click → *Colours*: Widget (default),
+- **Five colour palettes** — right-click → *Colours*: Default,
   Catppuccin Mocha, Dracula, Nord, Gruvbox Dark. Bound as `DynamicResource`,
   so switching needs no restart. The *Background* menu now picks
   transparency; the palette picks the colour.

@@ -413,7 +413,7 @@ yeni bir yerleşim eklemek tabloya bir satır eklemek demektir.
 
 ## Renk paletleri
 
-Sağ tık → **Renkler**: Widget (varsayılan), Catppuccin Mocha, Dracula, Nord,
+Sağ tık → **Renkler**: Varsayılan, Catppuccin Mocha, Dracula, Nord,
 Gruvbox Dark. Palet; zemini, yazıyı, bar rayını ve üç doluluk rengini
 (düşük / orta / yüksek) birlikte değiştirir. Bayat veri rengi ve 7 gün grafiği
 de paletten beslenir.

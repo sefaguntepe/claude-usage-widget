@@ -17,7 +17,7 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
-Add-Type -Namespace Widget -Name Win32K -MemberDefinition @'
+Add-Type -Namespace Widget -Name Win32 -MemberDefinition @'
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
 
     [DllImport("user32.dll")]
@@ -293,7 +293,7 @@ $ArkaPlanlar = @{ yok = '00'; hafif = '59'; koyu = 'A6' }
 #   Bayat  veri eskiyince barın döndüğü renk
 #   Sonuk  7 gün grafiğinde bugün olmayan çubuklar
 $RENKLER = [ordered]@{
-    varsayilan       = @{ Ad = 'Varsayilan';            Zemin = '000000'; Metin = '#F0F4FA'; Solgun = '#E8EDF5'
+    varsayilan  = @{ Ad = 'Varsayilan';            Zemin = '000000'; Metin = '#F0F4FA'; Solgun = '#E8EDF5'
                      Ray = '#26FFFFFF'; Dusuk = '#4C8DF6'; Orta = '#E8A33D'; Yuksek = '#E5484D'
                      Bayat = '#5A6472'; Sonuk = '#3D5E8C' }
     catppuccin  = @{ Ad = 'Catppuccin Mocha'; Zemin = '1E1E2E'; Metin = '#CDD6F4'; Solgun = '#BAC2DE'
@@ -1446,6 +1446,13 @@ function Update-Bar {
 # ─────────────────────────────────────────────────────────────────────────────
 $script:AcikUyarilar = New-Object System.Collections.ArrayList
 
+# Kapanan uyariyi listeden dusurur. Ayri bir fonksiyon olmasinin sebebi
+# teknik: closure icinden $script: erisimi calismiyor (bkz. Show-Uyari).
+function Remove-AcikUyari {
+    param($Pencere)
+    [void]$script:AcikUyarilar.Remove($Pencere)
+}
+
 [xml]$uyariXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -1515,7 +1522,17 @@ function Show-Uyari {
     $kapat = { param($s, $e) $e.Handled = $true; $u.Close() }.GetNewClosure()
     $u.FindName('UTamam').Add_MouseLeftButtonUp($kapat)
     $u.Add_MouseLeftButtonUp($kapat)
-    $u.Add_Closed({ [void]$script:AcikUyarilar.Remove($u) }.GetNewClosure())
+    # DİKKAT — .GetNewClosure() İÇİNDE $script: KULLANMAYIN.
+    #
+    # Burada `{ [void]$script:AcikUyarilar.Remove($u) }.GetNewClosure()` vardı
+    # ve uyarı KAPATILDIĞINDA "null üzerinde metot çağrılamaz" hatası veriyordu:
+    # GetNewClosure yeni bir modül kapsamı açıyor, oradaki $script: bu betiğin
+    # kapsamı DEĞİL — liste null görünüyor. Gövdeyi betik kapsamındaki bir
+    # fonksiyona taşımak tek çözüm; closure yalnızca yerel $u'yu taşısın.
+    #
+    # Aynı tuzak eşik menüsünde de widget'ı çökertmişti (1.4.x). Üçüncü kez
+    # düşmemek için kural: closure içinde yalnızca YEREL değişken.
+    $u.Add_Closed({ Remove-AcikUyari $u }.GetNewClosure())
 
     [void]$script:AcikUyarilar.Add($u)
     $u.Show()
@@ -1528,35 +1545,45 @@ function Test-Esik {
 
     $esik = [int]$script:Ayar.$EsikAlan
     if ($esik -le 0) { return }                                   # kapalı
-    if (-not $script:VeriTaze) { return }                         # bayat veride uyarma
+    if (-not $script:VeriTaze) { return }                         # bayat veride ne uyar ne kurul
     if ($null -eq $Pencere -or $null -eq $Pencere.used_percentage) { return }
 
+    $yuzde = [double]$Pencere.used_percentage
     $sifirlanma = ConvertFrom-UnixSaniye $Pencere.resets_at
-    # Sıfırlanma anı geçmişse pencere zaten dönmüştür; eski yüzdeyle uyarmak yanlış.
-    if ($null -ne $sifirlanma -and $sifirlanma -le [DateTime]::Now) { return }
+    # Sıfırlanma anı geçmişse pencere dönmüştür; eski yüzde artık geçerli değil.
+    if ($null -ne $sifirlanma -and $sifirlanma -le [DateTime]::Now) { $yuzde = 0 }
 
-    if ([double]$Pencere.used_percentage -lt $esik) { return }
-
-    # Buradan sonrası yalnızca eşik aşıldığında çalışır — tanı günlüğü ancak
-    # bu noktada yazıyor, yoksa saniyede iki satırla dosyayı boğardı.
-    # Pencere kimliği: sıfırlanma saati. Masaüstü kaynağında o yok; orada
-    # pencerenin başladığı örnek zamanı kullanılır. İkisi de yoksa uyarılmaz —
-    # anahtarsız uyarı ya hiç susmaz ya hiç tekrarlamaz.
-    $anahtar = $null
-    if ($null -ne $Pencere.resets_at) { $anahtar = [int64]$Pencere.resets_at }
-    elseif (Test-Ozellik $Pencere 'pencere_anahtari') { $anahtar = [int64]$Pencere.pencere_anahtari }
-    if ($null -eq $anahtar) { return }
-    if ($null -ne $script:Ayar.$AtesliAlan -and [int64]$script:Ayar.$AtesliAlan -eq $anahtar) {
-        return                                # bu pencere için zaten uyarıldı
+    # UYARI HAKKI: eşiğin ALTINA inildiğinde tazelenir, üstüne çıkıldığında
+    # harcanır. Tek kural bu.
+    #
+    # Önce "pencere kimliği" (sıfırlanma saati) ile anahtarlanıyordu ve bu
+    # yanlıştı: kimlik KAYNAĞA göre değişiyor — statusLine ve API gerçek
+    # resets_at veriyor, masaüstü kaynağında o yok ve serideki son düşüşten
+    # türetiliyor. Kaynak değiştiğinde anahtar da değişiyor ve kullanıcı aynı
+    # pencere için yeniden uyarı alıyordu.
+    #
+    # Yüzdenin kendisi kaynaktan bağımsız. "Eşiğin altına indi" hem pencerenin
+    # sıfırlanmasını hem de kullanıcının eşiği yukarı çekmesini doğal olarak
+    # kapsıyor: iki durumda da yeni bir uyarı hak edilmiş demektir.
+    if ($yuzde -lt $esik) {
+        if ($null -ne $script:Ayar.$AtesliAlan) {
+            $script:Ayar.$AtesliAlan = $null
+            Save-Ayarlar -Ayar $script:Ayar
+            Write-Tani ("esik hakki tazelendi {0}: %{1} < {2}" -f $Etiket, $yuzde, $esik)
+        }
+        return
     }
-    Write-Tani ("esik asildi {0}: %{1} >= {2}, pencere anahtari {3}" -f `
-        $Etiket, $Pencere.used_percentage, $esik, $anahtar)
 
-    # Önce kaydet, sonra göster: pencere gösterimi hata verse bile aynı pencere
-    # için tekrar tekrar uyarı çıkmasın.
-    $script:Ayar.$AtesliAlan = $anahtar
+    if ($null -ne $script:Ayar.$AtesliAlan) { return }   # hak harcanmış, eşiğin altına inmedi
+
+    Write-Tani ("esik asildi {0}: %{1} >= {2}" -f $Etiket, $yuzde, $esik)
+
+    # Önce kaydet, sonra göster: pencere gösterimi hata verse bile uyarı
+    # tekrar tekrar çıkmasın. Saklanan değer uyarının ZAMANI — yalnızca
+    # "harcandı" bilgisi taşıyor, karşılaştırmada kullanılmıyor.
+    $script:Ayar.$AtesliAlan = [int64][DateTimeOffset]::Now.ToUnixTimeSeconds()
     Save-Ayarlar -Ayar $script:Ayar
-    Show-Uyari -Etiket $Etiket -Yuzde ([double]$Pencere.used_percentage) -Sifirlanma $sifirlanma -Esik $esik
+    Show-Uyari -Etiket $Etiket -Yuzde $yuzde -Sifirlanma $sifirlanma -Esik $esik
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
