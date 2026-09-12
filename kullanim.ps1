@@ -146,6 +146,29 @@ $SWP_NOACTIVATE    = 0x0010
 # Dosyalar
 # ─────────────────────────────────────────────────────────────────────────────
 $VeriKlasor  = Join-Path $env:APPDATA 'ClaudeKullanim'
+
+# ÖMÜR GÜNLÜĞÜ — her zaman açık, ayrıntılı tanıdan (Write-Tani) farklı.
+#
+# Yalnızca hayati olaylar yazılır: başlangıç, kapanış, yakalanan hata. Amaç,
+# "kendi kendine kapanıyor" gibi bir şikâyette tahmin yürütmek yerine kanıta
+# bakabilmek. Write-Tani ayrıntılıdır ve KULLANIM_TANI=1 ister; o kapalıyken
+# elimizde hiçbir iz kalmıyordu.
+#
+# Dosya sınırlı: 300 satırı geçince başı atılır, sessizce büyümez.
+$GunlukDosya = Join-Path $VeriKlasor 'gunluk.txt'
+
+function Write-Kayit {
+    param([string]$Mesaj)
+    try {
+        if (-not (Test-Path $VeriKlasor)) { New-Item -ItemType Directory -Path $VeriKlasor -Force | Out-Null }
+        $satir = '{0:yyyy-MM-dd HH:mm:ss}  pid {1,-6} {2}' -f [DateTime]::Now, $PID, $Mesaj
+        Add-Content -Path $GunlukDosya -Value $satir -Encoding UTF8
+        $hepsi = @(Get-Content $GunlukDosya -ErrorAction SilentlyContinue)
+        if ($hepsi.Count -gt 300) {
+            Set-Content -Path $GunlukDosya -Value ($hepsi[-200..-1]) -Encoding UTF8
+        }
+    } catch { }
+}
 $DurumDosya  = Join-Path $VeriKlasor 'durum.json'      # statusLine yazar
 $OlayDosya   = Join-Path $VeriKlasor 'olay.json'       # hook'lar yazar
 $AyarDosya   = Join-Path $VeriKlasor 'pencere.json'    # widget yazar
@@ -220,10 +243,15 @@ $kilitAdi = 'Local\ClaudeUsageWidget_' + (
     ([System.Security.Cryptography.MD5]::Create().ComputeHash(
         [Text.Encoding]::UTF8.GetBytes($VeriKlasor.ToLowerInvariant())
     ) | ForEach-Object { $_.ToString('x2') }) -join '')
+Write-Kayit 'baslatildi'
 $script:TekOrnek = New-Object System.Threading.Mutex($false, $kilitAdi)
 if (-not $script:TekOrnek.WaitOne(0)) {
     # Zaten açık. Sessizce çık — ikinci pencere açmak faydadan çok zarar.
-    Write-Tani 'tek ornek: zaten calisiyor, cikiliyor'
+    # DİKKAT: burada Write-Tani ÇAĞRILAMAZ — o fonksiyon bu satırdan ~500 satır
+    # sonra tanımlanıyor ve ErrorActionPreference='Stop' altında tanımsız komut
+    # süreci düşürür. Betik yukarıdan aşağı çalışır; erken bloklarda yalnızca
+    # o noktaya kadar tanımlanmış şeyler kullanılabilir.
+    Write-Kayit 'ikinci kopya: zaten calisiyor, cikildi'
     exit 0
 }
 
@@ -409,6 +437,7 @@ Açmak istiyor musunuz?
         KALAN_DK='{0} dk sonra'; KALAN_SADK='{0} sa {1} dk sonra'
         YAS_SIMDI='az önce'; YAS_DK='{0} dk önce'; YAS_SA='{0} sa önce'; YAS_GUN='{0} gün önce'
         YAS_ILERI='saat tutarsız'
+        IC_HATA='Bir iç hata oluştu; ayrıntısı gunluk.txt dosyasında. Widget çalışmaya devam ediyor.'
         SURE_DK='{0} dk'; SURE_SADK='{0} sa {1} dk'
         HIZ_UYARI='Bu hızla ~{0} içinde biter'
         VERI_YOK='Henüz veri yok. Claude masaüstü uygulaması ya da terminalde Claude Code açılınca dolar.'
@@ -457,6 +486,7 @@ Do you want to enable it?
         KALAN_DK='in {0} min'; KALAN_SADK='in {0} h {1} min'
         YAS_SIMDI='just now'; YAS_DK='{0} min ago'; YAS_SA='{0} h ago'; YAS_GUN='{0} d ago'
         YAS_ILERI='clock mismatch'
+        IC_HATA='An internal error occurred; details are in gunluk.txt. The widget is still running.'
         SURE_DK='{0} min'; SURE_SADK='{0} h {1} min'
         HIZ_UYARI='At this rate it runs out in ~{0}'
         VERI_YOK='No data yet. It fills once the Claude desktop app or a terminal Claude Code session is running.'
@@ -800,6 +830,7 @@ $script:KotaSonYazma = [datetime]::MinValue
 $script:SonYoklama = [datetime]::MinValue
 $script:YoklayiciUyarildi = $false
 $script:HizKisa = $null               # dar yerleşimler için kısa hız uyarısı
+$script:IcHata = $false               # yakalanmış iç hata oldu mu (kalıcı)
 $script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
 $script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
@@ -1629,6 +1660,14 @@ function Update-Gorunum {
         $Uyari.Visibility = 'Visible'
     }
 
+    # İç hata en yüksek öncelikli: bir kez olduysa kapanana kadar görünür kalır.
+    # Sessizce yutulan bir hata, çöken bir programdan daha kötüdür — kullanıcı
+    # yanlış sayıya bakıp doğru sanabilir.
+    if ($script:IcHata) {
+        $Uyari.Text = (T 'IC_HATA')
+        $Uyari.Visibility = 'Visible'
+    }
+
     # Tüketim hızı yalnızca 5 saatlik pencere için hesaplanıyor.
     $bitisDk = Get-BitisDakikasi
 
@@ -2140,6 +2179,29 @@ $win.Add_SourceInitialized({
     }
 })
 
+# YAKALANMAMIŞ HATA = SESSİZ ÖLÜM.
+#
+# Zamanlayıcı tick'i try/catch içinde ama menü tıklamaları, fare olayları ve
+# nöbetçi zamanlayıcı değil. Dispatcher iş parçacığında kaçan bir istisna WPF
+# uygulamasını olduğu yerde sonlandırır — kullanıcı "kendi kendine kapandı"
+# görür, ekranda hiçbir açıklama olmaz.
+#
+# Burada iki şey yapılıyor: olay kalıcı günlüğe yazılıyor ve istisna işlenmiş
+# sayılıyor, yani widget ÖLMÜYOR. Hatayı gizlemek değil bu: günlükte duruyor
+# ve kullanıcı ekranda bir uyarı görüyor. Bir limit göstergesinin çökmektense
+# bozuk bir satırla ayakta kalması daha yararlı.
+$win.Dispatcher.add_UnhandledException({
+    param($k, $o)
+    try {
+        Write-Kayit ('YAKALANMAMIS HATA: ' + $o.Exception.GetType().Name + ' - ' + $o.Exception.Message)
+        Write-Kayit ('  yigin: ' + ($o.Exception.StackTrace -split "`n" | Select-Object -First 3 | ForEach-Object { $_.Trim() }) -join ' | ')
+        # Metni BURADA yazmak işe yaramaz: Update-Gorunum saniyede bir çalışıp
+        # uyarı alanını sıfırlıyor. Bayrağı kaldır, gösterimi o üstlensin.
+        $script:IcHata = $true
+    } catch { }
+    $o.Handled = $true      # widget ayakta kalsın
+})
+
 $win.Add_ContentRendered({
     Set-MasaustuSeviyesi
     (Get-Ogesi 'MnuBaslangic').IsChecked = Test-Baslangic
@@ -2156,6 +2218,15 @@ $win.Add_ContentRendered({
     # Öz-test (KULLANIM_BASLANGICTEST=1): açılışta başlat anahtarına GERÇEKTEN
     # tıklar — aç, kapat, tekrar aç. Kısayol yolu KULLANIM_BASLANGIC_YOL ile
     # yönlendirildiği için gerçek Başlangıç klasörüne dokunulmaz.
+    # Öz-test (KULLANIM_HATATEST=1): dispatcher üzerinde KASTEN hata fırlatır.
+    # Sınanan şey güvenlik ağı: widget ölmemeli, günlüğe yazılmalı, ekranda
+    # uyarı çıkmalı. Bu ağ olmadan menü/fare olaylarındaki bir istisna
+    # uygulamayı sessizce sonlandırıyordu — "kendi kendine kapandı".
+    if ($env:KULLANIM_HATATEST -eq '1') {
+        $win.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background,
+            [System.Action]{ throw 'OZTEST kasten firlatilan hata' }) | Out-Null
+    }
+
     if ($env:KULLANIM_BASLANGICTEST -eq '1') {
         $oge = Get-Ogesi 'MnuBaslangic'
         foreach ($istenen in @($true, $false, $true)) {
@@ -2227,7 +2298,7 @@ $win.Add_Closed({
     $veriTimer.Stop()
     # Neden kapandığını kaydet: "açtım ama kapandı" şikâyetinde tek kanıt bu.
     # Süreç dışarıdan öldürülürse bu satır yazılmaz — o da bir bilgidir.
-    Write-Tani 'pencere kapandi (Close cagrildi)'
+    Write-Kayit 'pencere kapandi (Close cagrildi)'
     try { $script:TekOrnek.ReleaseMutex() } catch { }
 })
 
