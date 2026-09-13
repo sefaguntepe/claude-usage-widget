@@ -54,6 +54,19 @@ const os = require('os');
 
 const KLASOR = path.join(process.env.APPDATA || os.homedir(), 'ClaudeKullanim');
 const DOSYA = path.join(KLASOR, 'kota.json');
+
+/* HATA AYRI DOSYAYA YAZILIR -- kota.json'a DEGIL.
+
+   Eskiden her hata kota.json'un ustune yaziliyordu ve son IYI olcum yok
+   oluyordu. Uretimde uc nokta her iki yoklamadan birinde 429 donuyordu; her
+   429'da widget API kaynagini kaybedip dosya kaynaklarina dusuyor, sonraki
+   basarili yoklamada geri donuyordu. Ekranda bu, sayilarin iki dakikada bir
+   ZIPLAMASI olarak goruluyordu -- kullanici bunu "yenilenmiyor" diye okur.
+
+   Artik kota.json yalnizca basarili olcumle guncellenir; hata gecici bir
+   durumdur ve kendi dosyasinda durur. Son iyi olcum yerinde kalir ve normal
+   bayatlik kurallariyla zaten yaslanir. */
+const HATA_DOSYA = path.join(KLASOR, 'kota-hata.json');
 const KIMLIK = path.join(os.homedir(), '.claude', '.credentials.json');
 
 const UC = 'https://api.anthropic.com/api/oauth/usage';
@@ -85,18 +98,75 @@ function jetonOku() {
   return { jeton: o.accessToken };
 }
 
+/* BU KAYIT HANGI HESABA AIT?
+
+   Kimlik olarak ORGANIZASYON kimligi kullaniliyor; masaustu uygulamasinin
+   gecmis dosyasinda ortak olarak bulunan tek alan o (`samples[].org`).
+
+   ~/.claude.json buyuk olabilir (proje gecmisi de orada), o yuzden tamami
+   ayristirilmiyor. Ama SABIT UZUNLUKTA BIR DILIM ALMAK YANLISTI: oauthAccount
+   nesnesi olculdugunde 857 bayttı, dilim ise 2048 -- yani komsu verinin icine
+   tasiyordu ve "organizationUuid" bu dosyada birden fazla geciyor. Yanlis
+   hesap okumak, bu surumde duzeltilen hatanin ta kendisini geri getirirdi.
+
+   Bunun yerine nesnenin KENDI siniri bulunuyor. Parantez sayarken metin
+   icleri atlanir; bir goruntu adindaki suslu parantez sayimi bozmasin. */
+function hesapOku() {
+  let ham;
+  try {
+    ham = fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8');
+  } catch (e) {
+    return null;
+  }
+
+  const im = ham.indexOf('"oauthAccount"');
+  if (im === -1) return null;
+  const bas = ham.indexOf('{', im);
+  if (bas === -1) return null;
+
+  let derinlik = 0, metinde = false, kacis = false, son = -1;
+  for (let k = bas; k < ham.length; k++) {
+    const c = ham[k];
+    if (metinde) {
+      if (kacis) kacis = false;
+      else if (c === '\\') kacis = true;
+      else if (c === '"') metinde = false;
+      continue;
+    }
+    if (c === '"') metinde = true;
+    else if (c === '{') derinlik++;
+    else if (c === '}') { derinlik--; if (derinlik === 0) { son = k; break; } }
+  }
+  if (son === -1) return null;
+
+  let nesne;
+  try { nesne = JSON.parse(ham.slice(bas, son + 1)); } catch (e) { return null; }
+  if (!nesne || typeof nesne.organizationUuid !== 'string' || !nesne.organizationUuid) return null;
+
+  return {
+    org: nesne.organizationUuid,
+    posta: typeof nesne.emailAddress === 'string' ? nesne.emailAddress : null,
+  };
+}
+
 /* Atomik yazma: gecici ad surece ozel (sabit '.tmp' adini butun yazicilar
    paylasiyordu), basarisizlikta canli dosyaya YAZILMAZ -- widget saniyede bir
    okuyor, yarim dosya gostermektense bir tur beklemek dogru. */
-function jsonYaz(veri) {
-  const tmp = `${DOSYA}.${process.pid}.tmp`;
+function jsonYaz(hedef, veri) {
+  const tmp = `${hedef}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(KLASOR, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify(veri), 'utf8');
-    fs.renameSync(tmp, DOSYA);
+    fs.renameSync(tmp, hedef);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (e2) { /* zaten yok */ }
   }
+}
+
+/* Basarili yoklamadan sonra hata dosyasi KALDIRILIR. Kalsaydi widget, cozulmus
+   bir hatayi surekli yeni sanip geri cekilmeye devam ederdi. */
+function hataTemizle() {
+  try { fs.unlinkSync(HATA_DOSYA); } catch (e) { /* zaten yok */ }
 }
 
 /* YALNIZCA durum kodu yazilir; govde ve basliklar asla (tasarim karari 3).
@@ -110,7 +180,7 @@ function jsonYaz(veri) {
 const YEREL_HATALAR = ['kimlik-yok', 'jeton-yok', 'jeton-suresi-dolmus'];
 
 function durumYaz(hata, kod) {
-  jsonYaz({
+  jsonYaz(HATA_DOSYA, {
     yazildi: Date.now(),
     hata: hata,
     http: kod === undefined ? null : kod,
@@ -180,7 +250,7 @@ async function main() {
         }
       }
     }
-    jsonYaz({ yazildi: Date.now(), hata: 'http', http: yanit.status, tekrarSn: bekle });
+    jsonYaz(HATA_DOSYA, { yazildi: Date.now(), hata: 'http', http: yanit.status, tekrarSn: bekle });
     return;
   }
 
@@ -192,13 +262,15 @@ async function main() {
   if (!bes && !haf) { durumYaz('alan-yok'); return; }
 
   const simdi = Date.now();
-  jsonYaz({
+  jsonYaz(DOSYA, {
     yazildi: simdi,
     olcumZamani: simdi,   // ucun yaniti taze: olcum ani = simdi
+    hesap: hesapOku(),
     five_hour: bes,
     seven_day: haf,
     kaynak: 'api',
   });
+  hataTemizle();
 }
 
 main().catch(() => durumYaz('beklenmeyen'));

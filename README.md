@@ -119,12 +119,30 @@ The widget polls both files once a second. What the labels mean:
 | `38% ▲` | Claude finished a turn ≥ 90 s after that measurement (hooks fire in the desktop app too). The real value is higher; the widget will not guess by how much |
 | countdown | Shown only when the reset time is *known* (came from the terminal and that window is still open). The desktop file has none — left blank, not invented |
 | grey bars + amber age | Both sources are silent (terminal > 5 min, desktop > 20 min). The number is correct but historical |
+| `⚑ account` / `⚑ script` / `⚑ error` | Strip, compact and terminal layouts only. The full sentence lives inside the card layout; this mark means "open the card to read it". In order: one source belongs to a different account, the live-polling script was not found, the widget has a persistent internal error |
 
 Working in the desktop app with no terminal: numbers refresh every 15 minutes,
 with `▲` filling the gaps. Want it faster for a while? Right-click the Claude
 tray icon once — 5-minute samples for the next 30 minutes. The widget itself
 never touches the network or your credentials; it reads what two apps already
 write to disk.
+
+### If the machine has more than one account
+
+Claude Code may be signed in to one account and the desktop app to another. The
+three sources are then **not photographs of the same thing**, and merging them
+mixes two accounts' percentages into the same bar.
+
+One rule: **numbers from different accounts are never merged.** The authoritative
+account is **the desktop app's** — the widget shows that window. `durum.json` and
+`kota.json` are accepted only if they belong to the same organization; otherwise
+they are ignored and the card says why:
+
+> Claude Code is signed in to a different account (…) — that source is ignored;
+> the numbers come from the desktop app account.
+
+With a single account nothing changes. Records written by older versions of the
+scripts carry no stamp and are not rejected; the stamp appears on their next write.
 
 ## Features
 

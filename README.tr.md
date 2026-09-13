@@ -144,12 +144,30 @@ Widget iki dosyaya saniyede bir bakar. Etiketlerin anlamı:
 | `38% ▲` | O ölçümden ≥ 90 sn sonra Claude bir tur bitirdi (hook'lar masaüstünde de ateşleniyor). Gerçek değer daha yüksek; widget ne kadar olduğunu uydurmaz |
 | geri sayım | Yalnızca sıfırlanma saati *bilinen* pencerede (terminalden geldi ve pencere hâlâ açık). Masaüstü dosyasında bu bilgi yok — boş kalır, uydurulmaz |
 | gri bar + amber yaş | İki kaynak da sustu (terminal > 5 dk, masaüstü > 20 dk). Sayı doğru ama tarihî |
+| `⚑ hesap` / `⚑ betik` / `⚑ hata` | Yalnızca şerit, kompakt ve terminal yerleşimlerinde. Uyarı cümlesi kart yerleşiminin içinde yaşıyor; bu im "kartı aç da tamamını oku" demek. Sırasıyla: kaynaklardan biri başka hesaba ait, canlı yoklama betigi bulunamadı, widget'ın kendi içinde ısrarlı bir hata var |
 
 Terminal açmadan masaüstünde çalışıyorsanız: sayı 15 dk'da bir yenilenir,
 aradaki boşluğu `▲` doldurur. Bir süre daha sık istiyorsanız Claude tepsi
 simgesine bir kez sağ tıklayın — 30 dakika boyunca 5 dk'da bir gelir. Widget
 kendisi hiçbir zaman ağa çıkmaz, kimlik bilgisi okumaz; iki uygulamanın zaten
 diske yazdığını okur.
+
+### Makinede birden fazla hesap varsa
+
+Claude Code bir hesaba, masaüstü uygulaması başkasına bağlı olabilir. O zaman üç
+kaynak **aynı gerçeğin fotoğrafı değildir** ve birleştirilirse iki hesabın
+yüzdeleri aynı barda karışır.
+
+Kural tek cümle: **farklı hesapların sayıları asla birleştirilmez.** Yetkili
+hesap **masaüstü uygulamasınınkidir** — widget onun penceresini gösterir.
+`durum.json` ve `kota.json` ancak aynı organizasyona aitse kabul edilir; değilse
+yok sayılır ve kartta sebebi yazar:
+
+> Claude Code başka bir hesapta (…) — o kaynak yok sayıldı, sayılar masaüstü
+> uygulamasının hesabından.
+
+Tek hesap kullanıyorsanız hiçbir şey değişmez. Damgası olmayan eski kayıtlar da
+reddedilmez; betikler bir sonraki yazımda damgayı koyar.
 
 ## Dosyalar
 
@@ -159,6 +177,7 @@ diske yazdığını okur.
 | `olay-yaz.js` | `Stop` / `Notification` hook betiği: olay.json'u yazar |
 | `statusline.js` | `settings.json`'daki statusLine **ve hook** ayarlarını kurar/kaldırır (yedekleyerek) |
 | `kota-yokla.js` | **Opsiyonel.** Canlı yoklama açıksa çalışır: OAuth erişim jetonuyla resmî kullanım ucunu yoklar, kota.json'u yazar. Jetona dokunan TEK dosya |
+| `kota-hata.json` | Yoklama hatası burada durur — `kota.json`'u EZMEZ, böylece son iyi ölçüm kaybolmaz. Başarıda silinir |
 | `kullanim.ps1` | Widget penceresi |
 | `kur-baslangic.ps1` / `kaldir-baslangic.ps1` | Kısayolları kur/kaldır (Başlangıç + Başlat menüsü, `-Masaustune` ile masaüstü) |
 
