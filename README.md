@@ -316,6 +316,15 @@ delete `%APPDATA%\ClaudeKullanim` if you want the history gone too.
 
 ## Notes
 
+- **What leaves the machine.** The widget itself makes no network requests at
+  all — it only reads files Claude already writes. The *status line* makes one:
+  an unauthenticated GET to `registry.npmjs.org` for the published version of
+  `@anthropic-ai/claude-code`, so it can tell you when a newer one exists. No
+  credentials, no usage data, nothing about you — the same request `npm view`
+  makes. At most once every six hours, in a detached process, silent on
+  failure. If you never install the status line, it never happens. Turning on
+  *Live polling* adds a second destination, `api.anthropic.com`; that one is
+  authenticated and described above. Nothing else on the network.
 - **Interface language follows Windows.** Turkish on a Turkish display language,
   English otherwise — no setting, no restart dance. Only `tr` and `en` are
   built in; adding another is a string table away.

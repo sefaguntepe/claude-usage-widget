@@ -478,6 +478,20 @@ engellediği türden. Bu yüzden şerit, çubuğun **üzerine binen** ayrı bir 
 Tek konum paylaşsalardı her geçişte biri kayardı. "Konumu sıfırla" aktif temayı
 sıfırlar.
 
+## Makineden ne çıkıyor
+
+**Widget'in kendisi hiçbir ağ isteği atmıyor** — yalnızca Claude'un zaten diske
+yazdığı dosyaları okuyor. Tek istek **durum satırından** geliyor:
+`registry.npmjs.org`'a `@anthropic-ai/claude-code`'un yayımlanmış sürümünü soran
+**kimliksiz** bir GET. "Daha yeni bir sürüm var" diyebilmek için. Durum satırını
+kurmadıysanız bu istek hiç olmuyor. Kimlik bilgisi,
+kullanım verisi, sizinle ilgili hiçbir şey gitmiyor — `npm view` komutunun attığı
+isteğin aynısı. En fazla altı saatte bir, ayrı bir süreçte çalışır ve
+başarısızlık sessizdir (`surum.json`).
+
+**Canlı yoklama** açılırsa ikinci bir hedef eklenir: `api.anthropic.com`. O istek
+kimlikli ve jeton takası yukarıda anlatılıyor. Başka hiçbir ağ trafiği yok.
+
 ## Arayüz dili
 
 Arayüz **Windows görüntü diline göre** otomatik seçilir: Türkçe sistemde Türkçe,
