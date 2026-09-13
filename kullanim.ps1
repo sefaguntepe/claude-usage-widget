@@ -275,7 +275,41 @@ Write-Kayit 'baslatildi'
     } catch { }
 })
 $script:TekOrnek = New-Object System.Threading.Mutex($false, $kilitAdi)
-if (-not $script:TekOrnek.WaitOne(0)) {
+# WaitOne(0) HER ZAMAN true/false DÖNMEZ.
+#
+# Önceki sahip mutex'i bırakmadan öldüyse (Görev Yöneticisi, sert çökme,
+# oturum kapatma) VE tam o anda başka bir kopyanın handle'ı açıksa çekirdek
+# nesnesi hayatta kalır ve bekleme AbandonedMutexException fırlatır. Burası
+# top-level, EAP='Stop' ve saran try/catch yok: süreç 'baslatildi' satırından
+# sonra günlüğe tek harf yazmadan exit 1 ile ölüyordu. -WindowStyle Hidden
+# altında stderr de hiçbir yere gitmiyor. Kullanıcıya kalan "açtım, açılmadı"
+# (0e78fbc'nin kapattığı şikâyet), günlüğe kalan ise sert kill'den ayırt
+# edilemeyen sessizlik (c9eb0ab'nin "ölümün cinsini yaz" kazanımı tam burada
+# eriyordu). Ölçüldü: PS 5.1 ve pwsh 7'de aynı, exit 1.
+#
+# KRİTİK: istisna atıldığında bekleme BAŞARIYLA tamamlanmıştır, kilit ARTIK
+# BİZDE (ölçüldü: catch içinden ReleaseMutex başarılı). Bu yüzden istisnayı
+# 'ikinci kopya' saymak YANLIŞ olurdu — gösterilecek çalışan kopya yok,
+# $CagriDosya notunu okuyacak kimse yok, widget yine açılmazdı. Doğrusu
+# kilidi devralıp normal açılışa devam etmek.
+#
+# "Terk edilmiş mutex sonraki açılışı engelliyor" diye bir durum YOK: son
+# handle kapanınca çekirdek nesnesi yok oluyor ve sonraki başlatma yepyeni bir
+# mutex yaratıyor (ölçüldü: ham Win32 WaitForSingleObject WAIT_OBJECT_0
+# döndü, WAIT_ABANDONED değil). O yüzden burada PID tazeleme / ad değiştirme
+# gibi bir şeye kalkışılmadı.
+$sahiplik = $false
+try {
+    $sahiplik = $script:TekOrnek.WaitOne(0)
+} catch [System.Threading.AbandonedMutexException] {
+    # Tür belirtmeden genel 'catch' KULLANILMADI: başka bir hata buradan
+    # sessizce geçerse tek örnek koruması tamamen kalkar ve bu satırların
+    # önlemek için var olduğu "iki pencere birbirinin ayarını eziyor" durumu
+    # geri gelir.
+    $sahiplik = $true
+    Write-Kayit 'onceki kopya mutexi birakmadan olmus (abandoned); kilit devralindi'
+}
+if (-not $sahiplik) {
     # Zaten açık. Sessizce çık — ikinci pencere açmak faydadan çok zarar.
     # DİKKAT: burada Write-Tani ÇAĞRILAMAZ — o fonksiyon bu satırdan ~500 satır
     # sonra tanımlanıyor ve ErrorActionPreference='Stop' altında tanımsız komut
@@ -464,6 +498,7 @@ Açmak istiyor musunuz?
         HESAP_UYUSMAZ='Claude Code başka bir hesapta ({0}) — o kaynak yok sayıldı, sayılar masaüstü uygulamasının hesabından.'
         TEMA_KOMPAKT='Kompakt'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
+        UYARI_KISA_HESAP='⚑ hesap'; UYARI_KISA_BETIK='⚑ betik'; UYARI_KISA_HATA='⚑ hata'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
         SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'; KAYNAK_MASAUSTU='masaüstü'
         SONRASI_KULLANIM='Ölçümden sonra Claude en az bir tur bitirdi — gerçek değer bundan yüksek.'
@@ -511,6 +546,7 @@ Do you want to enable it?
         HESAP_UYUSMAZ='Claude Code is signed in to a different account ({0}) — that source is ignored; the numbers come from the desktop app account.'
         TEMA_KOMPAKT='Compact'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5h'; SERIT_HAFTA='week'
+        UYARI_KISA_HESAP='⚑ account'; UYARI_KISA_BETIK='⚑ script'; UYARI_KISA_HATA='⚑ error'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
         SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'; KAYNAK_MASAUSTU='desktop'
         SONRASI_KULLANIM='Claude finished at least one turn after this measurement — the real value is higher.'
@@ -926,6 +962,7 @@ $script:ArdisikBasari = 0     # tabanı indirmeyi denemek için sayaç
 $script:SonUzakHata = [datetime]::MinValue
 $script:YoklamaHesapKisitli = $false   # tavan hesap uyuşmazlığı yüzünden mi
 $script:HizKisa = $null               # dar yerleşimler için kısa hız uyarısı
+$script:UyariKisa = $null             # dar yerleşimler için kısa durum uyarısı (⚑)
 $script:IcHata = $false               # yakalanmış iç hata oldu mu (kalıcı)
 $script:Baslangic = [DateTime]::Now   # kalp atışı için
 $script:VurguBitis = $null            # "kendini göster" vurgusunun bitiş anı
@@ -1143,8 +1180,20 @@ function Get-PencereBaslangici {
 # Arada düşüş (sıfırlanma) varsa hesaplanmaz — yanıltıcı olur.
 function Get-MasaustuHiz {
     param($Ornekler, [int64]$SimdiMs, [double]$Fh)
-    $pencere = @($Ornekler | Where-Object {
-        (Test-Ozellik $_.u 'fh') -and ($SimdiMs - [int64]$_.t) -le ($MASAUSTU_HIZ_DK * 60000) })
+    # SONDAN GERİYE TARANIYOR. Eskiden `Where-Object` bütün seriyi (796 örnek)
+    # eliyordu; oysa pencere sıralı listenin SON parçası, yani ilk sınır dışı
+    # örnekte durmak yeterli. Ölçüldü (PS 5.1): 169 ms → tek haneli ms.
+    # Sonuç birebir aynı: 'fh' taşımayan örnek burada da atlanıyor, kalanların
+    # sırası korunuyor.
+    $sinir = $SimdiMs - ($MASAUSTU_HIZ_DK * 60000)
+    $ters = New-Object System.Collections.Generic.List[object]
+    for ($k = $Ornekler.Count - 1; $k -ge 0; $k--) {
+        $o = $Ornekler[$k]
+        if ([int64]$o.t -lt $sinir) { break }
+        if (Test-Ozellik $o.u 'fh') { [void]$ters.Add($o) }
+    }
+    $ters.Reverse()
+    $pencere = $ters.ToArray()
     if ($pencere.Count -lt 2) { return $null }
     for ($i = 1; $i -lt $pencere.Count; $i++) {
         if ([double]$pencere[$i].u.fh -lt [double]$pencere[$i - 1].u.fh) { return $null }
@@ -1258,11 +1307,46 @@ function Read-Masaustu {
         # Süzme örnek listesinin TAMAMINA uygulanıyor: hız hesabı ve pencere
         # başlangıcı da bu seriden türüyor, ileri tarihli tek örnek ikisini de
         # bozardı.
-        $ham = @($j.samples | Where-Object { (Test-Ozellik $_ 't') -and (Test-Ozellik $_ 'u') } |
-                 Sort-Object { [int64]$_.t })
-        $ornekler = @($ham | Where-Object { Test-OlcumZamani ([int64]$_.t) })
-        if ($ornekler.Count -lt $ham.Count) {
-            Write-Tani ("masaustu: {0} ileri tarihli ornek atildi" -f ($ham.Count - $ornekler.Count))
+        #
+        # ÜÇ BORU HATTI TEK DÖNGÜYE İNDİ. Eskiden burada `Where-Object |
+        # Sort-Object {sb}` ve ardından ikinci bir `Where-Object` vardı; 796
+        # örnekte ölçüldü (PS 5.1): süzme+sıralama 294 ms, ileri tarih elemesi
+        # 91 ms. Maliyet JSON'dan değil, PowerShell'in nesne başına boru hattı
+        # yükünden geliyordu (okuma+ayrıştırma ikisi birlikte yalnızca 103 ms).
+        # Bu tur UI iş parçacığında koşuyor; ölçülebilir bir donma demekti.
+        #
+        # `[DateTimeOffset]::Now` ARTIK DÖNGÜNÜN DIŞINDA. Test-OlcumZamani onu
+        # her örnek için yeniden çağırıyordu — tek başına 796 sistem saati
+        # okuması. Toplu iş için tek bir "şimdi" kullanmak hem daha ucuz hem de
+        # daha tutarlı: eşik listenin ortasında kaymıyor.
+        #
+        # SIRALAMA KOŞULLU. Masaüstü uygulaması dosyayı zaten artan yazıyor
+        # (ölçüldü: gerçek dosyada 796/796 sıralı). Sırayı doğrulamak tek
+        # geçiş; sıralamak ise yalnızca gerçekten gerektiğinde yapılıyor.
+        # Bozuk sıralı bir dosyada davranış aynen korunuyor.
+        $esik = [double][DateTimeOffset]::Now.ToUnixTimeMilliseconds() + ($GELECEK_PAYI_SN * 1000.0)
+        $biriktir = New-Object System.Collections.Generic.List[object]
+        $atilan = 0
+        $sirali = $true
+        $oncekiT = [int64]::MinValue
+        foreach ($o in $j.samples) {
+            if (-not ((Test-Ozellik $o 't') -and (Test-Ozellik $o 'u'))) { continue }
+            $t = [int64]$o.t
+            if ([double]$t -gt $esik) { $atilan++; continue }
+            if ($t -lt $oncekiT) { $sirali = $false }
+            $oncekiT = $t
+            [void]$biriktir.Add($o)
+        }
+        # DİZİYE ÇEVİRİLİYOR, List olarak BIRAKILMIYOR: aşağıdaki `$ornekler[-1]`
+        # PowerShell 5.1'de yalnızca dizide çalışıyor, List[T] üzerinde
+        # "Index was out of range" ile patlıyor.
+        $ornekler = $biriktir.ToArray()
+        if (-not $sirali) {
+            Write-Tani 'masaustu: dosya sirali degil, siralaniyor'
+            $ornekler = @($ornekler | Sort-Object { [int64]$_.t })
+        }
+        if ($atilan -gt 0) {
+            Write-Tani ("masaustu: {0} ileri tarihli ornek atildi" -f $atilan)
         }
         if ($ornekler.Count -eq 0) { $script:Masaustu = $null; $script:YetkiliHesap = $null; return }
         $son = $ornekler[-1]
@@ -2180,6 +2264,15 @@ function Update-Gorunum {
     Read-Durum
     Update-Olay
 
+    # $Uyari kartın İÇİNDE yaşıyor; şerit/kompakt/terminal onu hiç göremiyor
+    # (Set-Tema kartı Collapsed yapıyor). Aşağıdaki uyarı basamaklarının her
+    # biri metni yazarken bir de bu bayrağı kuruyor: sıralama kartla AYNI
+    # yerden geldiği için son yazan kazanıyor ve iki tema iki farklı öncelik
+    # üretemiyor. Araç ipucu yolu kapalı (bkz. Update-Hiz'deki not), o yüzden
+    # tam cümle değil, kartı işaret eden kısa bir im taşınıyor.
+    # Her turda sıfırlanıyor: düzelen bir durum dar yerleşimde asılı kalmasın.
+    $script:UyariKisa = $null
+
     if ($null -eq $script:Veri) {
         $Kok.Opacity = 1.0
         $Yas.Text = ''
@@ -2191,6 +2284,11 @@ function Update-Gorunum {
         $Uyari.Text = $(if ($null -ne $script:RedEdilenHesap) {
             (T 'HESAP_UYUSMAZ') -f $script:RedEdilenHesap
         } else { (T 'VERI_YOK') })
+        # Dar yerleşimde "—" tek başına "henüz veri yok" diye okunuyor; oysa
+        # sebep reddedilen hesap olabilir — üstteki yorumun kartta engellediği
+        # yanılgının aynısı. Gerçekten veri yoksa bayrak YANMAZ: "—" zaten
+        # doğruyu söylüyor, üstüne im basmak gürültü olurdu.
+        if ($null -ne $script:RedEdilenHesap) { $script:UyariKisa = (T 'UYARI_KISA_HESAP') }
         Update-Bar $null $Yuzde5 $Sifir5 $Dolgu5
         Update-Bar $null $YuzdeH $SifirH $DolguH
         Update-DigerYerlesim $null
@@ -2255,6 +2353,10 @@ function Update-Gorunum {
         # Uzun süredir beslenmiyorsa SEBEBİNİ de söyle. Yalnızca soluklaşmak
         # "widget bozuldu mu?" sorusunu doğuruyor; asıl sebep veri kaynağının
         # yalnızca terminal oturumunda çalışması.
+        # Bayatlik dar yerlesimlerde BILEREK bayrak almiyor: barlarin
+        # grilesmesi ve serit/terminal not yuvasindaki yas zaten ayni seyi
+        # soyluyor. Ikinci bir im basmak bayragi "hep yaniyor" haline
+        # getirip anlamsizlastirirdi.
         if ($yasSn -gt $COK_BAYAT_SN) {
             $Uyari.Text = (T 'VERI_BAYAT')
             $Uyari.Visibility = 'Visible'
@@ -2267,6 +2369,7 @@ function Update-Gorunum {
     if ([int]$script:Ayar.canliYoklama -gt 0 -and -not (Test-Path $YoklayiciBetik)) {
         $Uyari.Text = (T 'YOKLAMA_BETIK_YOK')
         $Uyari.Visibility = 'Visible'
+        $script:UyariKisa = (T 'UYARI_KISA_BETIK')
     }
 
     # Kaynaklardan biri BAŞKA HESABA aitse SÖYLE. Sessizce yok saymak doğru
@@ -2275,6 +2378,7 @@ function Update-Gorunum {
     if ($null -ne $script:RedEdilenHesap) {
         $Uyari.Text = ((T 'HESAP_UYUSMAZ') -f $script:RedEdilenHesap)
         $Uyari.Visibility = 'Visible'
+        $script:UyariKisa = (T 'UYARI_KISA_HESAP')
     }
 
     # İç hata en yüksek öncelikli: bir kez olduysa kapanana kadar görünür kalır.
@@ -2283,6 +2387,7 @@ function Update-Gorunum {
     if ($script:IcHata) {
         $Uyari.Text = (T 'IC_HATA')
         $Uyari.Visibility = 'Visible'
+        $script:UyariKisa = (T 'UYARI_KISA_HATA')
     }
 
     # Tüketim hızı yalnızca 5 saatlik pencere için hesaplanıyor.
@@ -2357,7 +2462,14 @@ function Update-Kompakt {
     Set-MiniBar $bes $Kompakt5 $Kompakt5Dolgu $KOMPAKT_IZ
     Set-MiniBar $haf $KompaktH $KompaktHDolgu $KOMPAKT_IZ
     # Kompakt'ta metin için yer yok; kırmızının sebebini tek işaret taşıyor.
-    if ($script:VeriTaze -and $null -ne $script:HizKisa -and $bes.Var) { $Kompakt5.Text += ' ⚠' }
+    # ⚑ (kaynağın kendisi şüpheli) ⚠'nin (o kaynaktan TÜREYEN hız tahmini)
+    # önüne geçiyor: şüpheli veriden çıkan tahmini uyarmak, veriye neden
+    # güvenilmediğini söylemeden anlamsız. İkisini yan yana basmak denendi:
+    # 20 puntoluk sayının yanında kutuyu genişletip kompaktı seçmenin amacını
+    # bozuyor. Bayrakta $bes.Var koşulu YOK — "—" görülen durum, sebebin en
+    # çok gizlendiği durum (bkz. Update-Gorunum'un veri-yok dalı).
+    if ($null -ne $script:UyariKisa) { $Kompakt5.Text += ' ⚑' }
+    elseif ($script:VeriTaze -and $null -ne $script:HizKisa -and $bes.Var) { $Kompakt5.Text += ' ⚠' }
     $Kompakt5.Foreground = ConvertTo-Fircasi $(if ($bes.Var) { $bes.Renk } else { $script:Renk.Bayat })
     $KompaktH.Foreground = ConvertTo-Fircasi $(if ($haf.Var) { $haf.Renk } else { $script:Renk.Bayat })
 }
@@ -2404,14 +2516,19 @@ function Update-Terminal {
     Set-TerminalSatiri $TerminalH (T 'SERIT_HAFTA') $haf
 
     $parca = @()
+    # Bayrak EN BAŞA: alt satırın kalanı (sıfırlanma, hız) o şüpheli veriden
+    # türeyen sayılar; önce neye bakıldığı söylenmeli.
+    if ($null -ne $script:UyariKisa) { $parca += $script:UyariKisa }
     if ($bes.Var -and $null -ne $bes.Sifirlanma) { $parca += Format-Kalan $bes.Sifirlanma }
     if ($script:VeriTaze) {
         if ($null -ne $script:HizKisa) { $parca += $script:HizKisa }
         if ($script:KullanimSonrasi)   { $parca += '+' }
     } else { $parca += $Yas.Text }
     $TerminalAlt.Text = ($parca -join '  ·  ')
+    # Orta, kartta $Uyari'nin rengi: aynı durum iki temada aynı renkte çıksın.
     $TerminalAlt.Foreground = ConvertTo-Fircasi $(
-        if ($script:VeriTaze -and $null -ne $script:HizKisa) { $script:Renk.Yuksek } else { $script:Renk.Solgun })
+        if ($null -ne $script:UyariKisa) { $script:Renk.Orta }
+        elseif ($script:VeriTaze -and $null -ne $script:HizKisa) { $script:Renk.Yuksek } else { $script:Renk.Solgun })
 }
 
 function Update-Serit {
@@ -2453,9 +2570,15 @@ function Update-Serit {
     if ($script:VeriTaze -and $script:KullanimSonrasi -and $Serit5Yuzde.Text -ne '—') { $Serit5Yuzde.Text += ' ▲' }
     $SeritKalan.Text = if ($null -ne $bes) { Format-Kalan (ConvertFrom-UnixSaniye $bes.resets_at) } else { '' }
 
-    # Not yuvası, öncelik sırasıyla: veri bayatsa YAŞ (o zaman hız tahmini de
-    # güvenilmez), taze ve hız uyarısı varsa UYARI, yoksa boş.
-    if (-not $script:VeriTaze) {
+    # Not yuvası, öncelik sırasıyla: kurulum/hesap uyarısı varsa BAYRAK, veri
+    # bayatsa YAŞ (o zaman hız tahmini de güvenilmez), taze ve hız uyarısı
+    # varsa UYARI, yoksa boş. Bayrak yaşın önünde: bayatlığı grileşen barlar
+    # zaten söylüyor, reddedilen hesabı ise bu yuva dışında hiçbir şey
+    # söylemiyor.
+    if ($null -ne $script:UyariKisa) {
+        $SeritYas.Text = $script:UyariKisa
+        $SeritYas.Foreground = ConvertTo-Fircasi $script:Renk.Orta
+    } elseif (-not $script:VeriTaze) {
         $SeritYas.Text = $Yas.Text
         $SeritYas.Foreground = ConvertTo-Fircasi $script:Renk.Orta
     } elseif ($null -ne $script:HizKisa) {

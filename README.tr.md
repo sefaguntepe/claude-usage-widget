@@ -144,6 +144,7 @@ Widget iki dosyaya saniyede bir bakar. Etiketlerin anlamı:
 | `38% ▲` | O ölçümden ≥ 90 sn sonra Claude bir tur bitirdi (hook'lar masaüstünde de ateşleniyor). Gerçek değer daha yüksek; widget ne kadar olduğunu uydurmaz |
 | geri sayım | Yalnızca sıfırlanma saati *bilinen* pencerede (terminalden geldi ve pencere hâlâ açık). Masaüstü dosyasında bu bilgi yok — boş kalır, uydurulmaz |
 | gri bar + amber yaş | İki kaynak da sustu (terminal > 5 dk, masaüstü > 20 dk). Sayı doğru ama tarihî |
+| `⚑ hesap` / `⚑ betik` / `⚑ hata` | Yalnızca şerit, kompakt ve terminal yerleşimlerinde. Uyarı cümlesi kart yerleşiminin içinde yaşıyor; bu im "kartı aç da tamamını oku" demek. Sırasıyla: kaynaklardan biri başka hesaba ait, canlı yoklama betigi bulunamadı, widget'ın kendi içinde ısrarlı bir hata var |
 
 Terminal açmadan masaüstünde çalışıyorsanız: sayı 15 dk'da bir yenilenir,
 aradaki boşluğu `▲` doldurur. Bir süre daha sık istiyorsanız Claude tepsi

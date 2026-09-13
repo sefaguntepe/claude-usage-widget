@@ -34,6 +34,7 @@ const SURUM_TAZELIK_MS = 6 * 60 * 60 * 1000;
 const HIZ_PENCERE_DK = 45;                // tuketim hizi bu kadar geriye bakar
 const EN_FAZLA_ORNEK = 300;
 const EN_FAZLA_GUN = 30;
+const EN_FAZLA_HESAP = 3;                 // gecmis.json'da saklanan hesap kovasi
 const ALARM_ESIGI = 90;
 
 /* Dil: sistem yereline gore otomatik (yalnizca tr / en).
@@ -226,10 +227,96 @@ function surumRozeti(kurulu) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Gecmis: ornekleme, tuketim hizi, gunluk toplam
 // ─────────────────────────────────────────────────────────────────────────────
-function gecmisIsle(f5, d7) {
-  const g = jsonOku(GECMIS, null) || { ornekler: [], gunler: {} };
-  if (!Array.isArray(g.ornekler)) g.ornekler = [];
-  if (!g.gunler || typeof g.gunler !== 'object') g.gunler = {};
+/* GECMIS HESABA GORE BOLUNUR -- KAYIT DAMGASI BURADA YETMIYOR.
+
+   durum.json ve kota.json birer FOTOGRAF; onlarda kayit basina damga yeter.
+   gecmis.json ise BIRIKIM: gunluk tuketim ardisik iki ornegin FARKINDAN
+   cikiyor. Hesap degisince o fark iki AYRI kotanin yuzdeleri arasinda aliniyor
+   ve gecisin kendisi tuketim sanildi. Olculdu: A %9.6 iken B %85'e girmek
+   bugunun cubugunu 8'den 83.4'e cikardi, hiz 2.08 puan/dk okundu ve terminale
+   kalin kirmizi "~7 dk" uyarisi dustu. Ters yonde (A %79 -> B %3) dusus
+   "pencere sifirlandi" sanilir, B'nin yuzdesi bir kez daha eklenir ve A'nin
+   60 puanlik gunu B'nin cubugunda durmaya devam eder.
+
+   DAMGAYI KAYDA BASARAK YAKALANAMIYOR: dosyaya B damgasi vurulur, widget onu
+   Test-Hesap'tan sorunsuz gecirir -- kirlilik damgada degil, gecmistedir.
+   Ustelik widget grafigi gun bazinda MAX ile birlestirdigi icin sismis gun
+   masaustunun DOGRU serisini de eziyor ve ekranda bir hafta duruyor. (Hiz
+   kendini toparliyor: HIZ_PENCERE_DK=45 dakika sonra kirli ornek pencereden
+   dusuyor.)
+
+   SILMEK DEGIL BOLMEK. Her organizasyonun kendi kovasi var: hesap degisince
+   A'nin gecmisi oldugu yerde kaliyor, kullanici geri dondugunde grafigi
+   eksiksiz geliyor. Silmek, bir oturum acma yuzunden gercek gecmisi yakmak
+   olurdu -- ustelik gecmis.json `hiz`in tek kaynagi.
+
+   Damgasiz eski dosya ATILMAZ, yurutulen hesabin kovasina devredilir: widget
+   tarafindaki Test-Hesap ile ayni kural, kanitlayamadigimiz seyi yok
+   saymiyoruz. Devir yalnizca ortada baska damgali kova yokken yapilir; varsa
+   o birikimin sahibi belirsizdir ve oldugu yerde birakilir. */
+function gecmisKova(hesap) {
+  /* `hesaplar` bir DIZI ise sema taninmaz sayilir. typeof [] === 'object'
+     oldugu icin dizi kapidan geciyor, JSON.stringify ise diziye takilan adli
+     ozellikleri ATTIGI icin kova her yazimda sessizce kaybolur ve gecmis
+     hicbir zaman birikmezdi. */
+  const tanidik = (n) => !!n && typeof n === 'object' && !Array.isArray(n);
+  const ham = jsonOku(GECMIS, null);
+  const kok = (tanidik(ham) && tanidik(ham.hesaplar)) ? ham : { hesaplar: {} };
+  if (!tanidik(kok.hesaplar)) kok.hesaplar = {};
+
+  /* Hesap okunamiyorsa (oauthAccount yok; API anahtariyla ya da kurumsal
+     kurulum) SON KULLANILAN kova surdurulur. Bilinmeyen bir kimlik ugruna her
+     turda yeni kova acmak hem hizi hem grafigi sifirlardi. */
+  const anahtar = (hesap && hesap.org) ? String(hesap.org)
+    : (typeof kok.aktif === 'string' && kok.aktif) ? kok.aktif : 'bilinmeyen';
+
+  let kova = kok.hesaplar[anahtar];
+  if (!kova) {
+    const damgali = Object.keys(kok.hesaplar).filter((a) => a !== 'bilinmeyen');
+    if (damgali.length === 0) {
+      const devir = kok.hesaplar['bilinmeyen'] ||
+        ((ham && (Array.isArray(ham.ornekler) || tanidik(ham.gunler)))
+          ? { ornekler: ham.ornekler, gunler: ham.gunler } : null);
+      if (devir) { kova = devir; delete kok.hesaplar['bilinmeyen']; }
+    }
+  }
+
+  if (!tanidik(kova)) kova = {};
+  if (!Array.isArray(kova.ornekler)) kova.ornekler = [];
+  if (!tanidik(kova.gunler)) kova.gunler = {};
+  // Posta yalnizca insan okusun diye; kimlik KARSILASTIRMASI hep org uzerinden
+  // (hesapOku'daki gerekcenin aynisi: uc kaynakta ortak olan tek alan org).
+  if (hesap && hesap.posta) kova.posta = hesap.posta;
+
+  kok.hesaplar[anahtar] = kova;
+  kok.aktif = anahtar;
+  delete kok.ornekler;   // devredilen duz alanlarin ikinci kopyasi kalmasin
+  delete kok.gunler;
+  return { kok: kok, kova: kova };
+}
+
+/* Kova sayisi sinirli: bu dosya her statusLine cagrisinda bastan ayristiriliyor,
+   sinirsiz buyume dogrudan gecikme demek. Uc hesap (kisisel + iki is) gercekci
+   bir ust sinir. Dusenler en eski orneklilerdir; YURUTULEN kova asla atilmaz. */
+function kovaBudama(kok) {
+  const adlar = Object.keys(kok.hesaplar).filter((a) => a !== kok.aktif);
+  if (adlar.length <= EN_FAZLA_HESAP - 1) return;
+  const sonAn = (ad) => {
+    const o = kok.hesaplar[ad] && kok.hesaplar[ad].ornekler;
+    const s = Array.isArray(o) && o.length ? o[o.length - 1] : null;
+    return (s && typeof s.t === 'number') ? s.t : 0;
+  };
+  adlar.sort((a, b) => sonAn(b) - sonAn(a));
+  for (const eski of adlar.slice(EN_FAZLA_HESAP - 1)) delete kok.hesaplar[eski];
+}
+
+/* Hesap PARAMETREYLE geliyor, burada yeniden OKUNMUYOR: durum.json kapisiyla
+   ayni okumayi kullanmak sart (1.12.1'deki gerekcenin aynisi) -- okuma ile
+   yazma arasinda hesap degisirse kayit bir hesabin damgasini tasirken gecmis
+   otekinin kovasina yazilirdi. */
+function gecmisIsle(f5, d7, hesap) {
+  const kovalar = gecmisKova(hesap);
+  const g = kovalar.kova;
 
   const simdi = Date.now();
   const son = g.ornekler[g.ornekler.length - 1];
@@ -258,7 +345,8 @@ function gecmisIsle(f5, d7) {
       for (const eski of gunler.slice(0, gunler.length - EN_FAZLA_GUN)) delete g.gunler[eski];
     }
 
-    jsonYaz(GECMIS, g);
+    kovaBudama(kovalar.kok);
+    jsonYaz(GECMIS, kovalar.kok);
   }
 
   return g;
@@ -317,12 +405,43 @@ function pencereBirlestir(eskiP, yeniP) {
   return { p: eskiP, degisti: false };                      // esit veya dusuk -> eski fotograf
 }
 
+/* GUN ANAHTARLARI SABIT 24 SAATLE GERI SAYILMAZ.
+
+   `Date.now() - i * 86400000` bir ZAMAN farki; gun anahtari ise TAKVIM
+   birimi. Yaz saati uygulayan bolgelerde gun 23 ya da 25 saat surdugu icin
+   ikisi ayrisiyor. Gecisi izleyen ~6 gun boyunca, yerel saat gunun son
+   (sonbahar) ya da ilk (ilkbahar) saatindeyse gecisten onceki butun adimlar
+   bir gun kayiyor.
+
+   Olculdu (bu makine, Pacific): 1 Kasim 2026 23:30'da liste 2026-11-01'i IKI
+   kez uretip en eski gunu dusuruyor. Bir yil taranarak bulundu: yilda iki
+   gecis, her birinden sonra 6 gun, yalnizca gece yarisina bir saatten yakin
+   kosumlarda.
+
+   Tekrarlanan anahtar yalnizca grafigi bozmuyor, WIDGET'I FIRLATIYOR:
+   Update-Hafta'daki `$gunler | Where-Object { $_.gun -eq $bugun }` iki kayit
+   donuyor ve `[double]$bugunVeri.tuketim` bir Object[] uzerinde calisiyor.
+   Olculdu (PS 5.1): "System.Object[] -> System.Double cevrilemez". Ayni
+   turda Test-Esik ve Update-DigerYerlesim hic calismiyor.
+
+   PS tarafi (Get-MasaustuHaftalik) zaten takvimde adimliyor
+   ([DateTime]::Now.Date.AddDays(-$i)) ve dogru; Merge-Kaynaklar iki seriyi
+   gun bazinda eslestirdigi icin iki turetmenin AYNI anahtarlari uretmesi
+   sart -- bu yuzden duzeltme JS tarafinda.
+
+   Gun ortasi capa (12:00) sart degil ama bedava: gecisi gece yarisinda yapan
+   bolgelerde (Santiago, Beirut) setDate'in var olmayan bir saate denk gelip
+   ileri normalize edilmesini de kapatiyor. */
 function haftalikOzet(g) {
   const liste = [];
-  for (let i = 6; i >= 0; i--) {
-    const anahtar = gunAnahtari(Date.now() - i * 86400000);
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() - 6);
+  for (let i = 0; i < 7; i++) {
+    const anahtar = gunAnahtari(d.getTime());
     const gun = (g && g.gunler && g.gunler[anahtar]) || null;
     liste.push({ gun: anahtar, tuketim: gun ? gun.tuketim : 0, zirve: gun ? gun.zirve : 0 });
+    d.setDate(d.getDate() + 1);
   }
   return liste;
 }
@@ -411,7 +530,7 @@ function main() {
 
     let haftalik = [];
     if (f5 !== null) {
-      const g = gecmisIsle(f5, d7);
+      const g = gecmisIsle(f5, d7, hesap);
       hiz = hizHesapla(g, f5);
       haftalik = haftalikOzet(g);
     }

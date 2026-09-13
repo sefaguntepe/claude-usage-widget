@@ -119,6 +119,7 @@ The widget polls both files once a second. What the labels mean:
 | `38% ▲` | Claude finished a turn ≥ 90 s after that measurement (hooks fire in the desktop app too). The real value is higher; the widget will not guess by how much |
 | countdown | Shown only when the reset time is *known* (came from the terminal and that window is still open). The desktop file has none — left blank, not invented |
 | grey bars + amber age | Both sources are silent (terminal > 5 min, desktop > 20 min). The number is correct but historical |
+| `⚑ account` / `⚑ script` / `⚑ error` | Strip, compact and terminal layouts only. The full sentence lives inside the card layout; this mark means "open the card to read it". In order: one source belongs to a different account, the live-polling script was not found, the widget has a persistent internal error |
 
 Working in the desktop app with no terminal: numbers refresh every 15 minutes,
 with `▲` filling the gaps. Want it faster for a while? Right-click the Claude
