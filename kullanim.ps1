@@ -418,15 +418,41 @@ function Test-OlcumZamani {
     return ($ileriSn -le $GELECEK_PAYI_SN)
 }
 
+# YAŞ, DUVAR SAATİ FARKI DEĞİLDİR.
+#
+# Yaş `[DateTime]::Now - <yerel damga>` ile hesaplanıyordu. İki taraf da
+# Kind=Local ve [datetime] çıkarması saat dilimini hiç hesaba katmaz; yaz saati
+# geçişinde duvar saati bir saat atladığı ya da tekrarlandığı için fark GERÇEK
+# geçen süre olmaktan çıkıyor. İlkbaharda 10 dakikalık ölçüm "1 sa önce"
+# görünüyor — bu, kartı soluklaştırıp ($Kok.Opacity) VeriTaze'yi $false yaptığı
+# için EŞİK UYARISINI DA susturuyor. Sonbaharda tekrarlanan saatte ters yönde:
+# bayat veri taze görünüyor.
+#
+# Çözüm damganın KENDİSİYLE, yani unix ms ile çalışmak. Yerel [datetime]'ı
+# koruyup .ToUniversalTime() demek de düşünüldü; bugün doğru sonuç veriyor ama
+# DateTimeOffset.LocalDateTime'ın sonbaharda hangi turda olduğunu taşıdığı
+# BELGESİZ bayrağa yaslanıyor — o bayrak damga bir kez yeniden kurulunca
+# (ToString/Parse, .Date, AddDays) sessizce kayboluyor.
+#
+# ConvertFrom-UnixSaniye artık yalnızca EKRANA yazılan saatler (sıfırlanma
+# metni) için; orada yerel duvar saati zaten doğrusu.
+function Get-YasSn {
+    param($Ms)
+    if ($null -eq $Ms) { return $null }
+    try { return ([double][DateTimeOffset]::Now.ToUnixTimeMilliseconds() - [double]$Ms) / 1000.0 }
+    catch { return $null }
+}
+
 function Format-Yas {
-    param([datetime]$Zaman)
-    $fark = [DateTime]::Now - $Zaman
+    param($Ms)
+    $yasSn = Get-YasSn $Ms
+    if ($null -eq $yasSn) { return '' }
     # İleri tarihli damga "az önce" diye okunmasın — sebebini söyle.
-    if ($fark.TotalSeconds -lt -$GELECEK_PAYI_SN) { return (T 'YAS_ILERI') }
-    if ($fark.TotalSeconds -lt 90)  { return (T 'YAS_SIMDI') }
-    if ($fark.TotalMinutes -lt 60)  { return ((T 'YAS_DK') -f [int][Math]::Floor($fark.TotalMinutes)) }
-    if ($fark.TotalHours -lt 24)    { return ((T 'YAS_SA') -f [int][Math]::Floor($fark.TotalHours)) }
-    return ((T 'YAS_GUN') -f [int][Math]::Floor($fark.TotalDays))
+    if ($yasSn -lt -$GELECEK_PAYI_SN) { return (T 'YAS_ILERI') }
+    if ($yasSn -lt 90)    { return (T 'YAS_SIMDI') }
+    if ($yasSn -lt 3600)  { return ((T 'YAS_DK') -f [int][Math]::Floor($yasSn / 60)) }
+    if ($yasSn -lt 86400) { return ((T 'YAS_SA') -f [int][Math]::Floor($yasSn / 3600)) }
+    return ((T 'YAS_GUN') -f [int][Math]::Floor($yasSn / 86400))
 }
 
 # Bar rengi. Sadece doluluğa değil TÜKETİM HIZINA da bakar: pencere
@@ -637,8 +663,16 @@ $xamlMetin = @'
         <RowDefinition Height="Auto"/>
       </Grid.RowDefinitions>
 
-      <TextBlock Grid.RowSpan="2" Text="CLAUDE" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
-                 Foreground="{DynamicResource RSolgun}" Opacity="0.5" VerticalAlignment="Center" Margin="0,0,10,0"/>
+      <!-- Marka etiketi ve onun altındaki uyarı imi. İm BURADA, iki satırın
+           ortasında duruyor: not yuvasına (SeritYas) konduğunda haftalık
+           satırının hizasına düşüyor ve widget'ın tamamına ait bir uyarı,
+           haftalık ölçümün bir özelliğiymiş gibi okunuyordu. -->
+      <StackPanel Grid.RowSpan="2" VerticalAlignment="Center" Margin="0,0,10,0">
+        <TextBlock Text="CLAUDE" FontFamily="Segoe UI" FontSize="9" FontWeight="SemiBold"
+                   Foreground="{DynamicResource RSolgun}" Opacity="0.5"/>
+        <TextBlock x:Name="SeritUyari" FontFamily="Segoe UI" FontSize="9" Visibility="Collapsed"
+                   Foreground="{DynamicResource ROrta}" Margin="0,1,0,0"/>
+      </StackPanel>
 
       <!-- 1. satır: 5 saat -->
       <TextBlock Grid.Row="0" Grid.Column="1" Text="@@SERIT_5SA@@" FontFamily="Segoe UI" FontSize="9.5"
@@ -912,6 +946,7 @@ $SeritKapsul = Get-Ogesi 'SeritKapsul'
 $Serit5Dolgu = Get-Ogesi 'Serit5Dolgu'; $Serit5Yuzde = Get-Ogesi 'Serit5Yuzde'
 $SeritHDolgu = Get-Ogesi 'SeritHDolgu'; $SeritHYuzde = Get-Ogesi 'SeritHYuzde'
 $SeritKalan  = Get-Ogesi 'SeritKalan';  $SeritYas    = Get-Ogesi 'SeritYas'
+$SeritUyari  = Get-Ogesi 'SeritUyari'
 $KompaktKapsul = Get-Ogesi 'KompaktKapsul'
 $Kompakt5 = Get-Ogesi 'Kompakt5'; $Kompakt5Dolgu = Get-Ogesi 'Kompakt5Dolgu'
 $KompaktH = Get-Ogesi 'KompaktH'; $KompaktHDolgu = Get-Ogesi 'KompaktHDolgu'
@@ -2177,10 +2212,9 @@ function Update-Olay {
     # "ölçümden sonra kullanım oldu mu" sorusunun cevabı; olay kutusu kapansa da tutulur.
     if (Test-Ozellik $o 'zaman') { $script:SonOlayMs = [int64]$o.zaman }
 
-    $zaman = ConvertFrom-UnixSaniye ([int64]$o.zaman / 1000)
-    if ($null -eq $zaman) { $OlayKutu.Visibility = 'Collapsed'; return }
+    $yasSn = Get-YasSn $o.zaman
+    if ($null -eq $yasSn) { $OlayKutu.Visibility = 'Collapsed'; return }
 
-    $yasSn = ([DateTime]::Now - $zaman).TotalSeconds
     if ($yasSn -gt $OLAY_OMUR_SN -or $yasSn -lt -60) {
         $OlayKutu.Visibility = 'Collapsed'
         return
@@ -2211,8 +2245,8 @@ function Update-Olay {
         if ((Test-Ozellik $script:Veri 'oturum')) {
             $veriTaze = $false
             if ($null -ne $script:Veri.yazildi) {
-                $vy = ConvertFrom-UnixSaniye ([int64]$script:Veri.yazildi / 1000)
-                if ($null -ne $vy) { $veriTaze = ((([DateTime]::Now - $vy).TotalSeconds) -le $BAYAT_SN) }
+                $vy = Get-YasSn $script:Veri.yazildi
+                if ($null -ne $vy) { $veriTaze = ($vy -le $BAYAT_SN) }
             }
 
             $ayniProje = $false
@@ -2239,7 +2273,7 @@ function Update-Olay {
     }
 
     # Üst satır: ne olduğu + ne zaman. Alt satır: ayrıntı (satır sayısı, dizin).
-    $metin = '{0}  ·  {1}' -f $metin, (Format-Yas $zaman)
+    $metin = '{0}  ·  {1}' -f $metin, (Format-Yas $o.zaman)
     if ($o.dizin) { $alt += $o.dizin }
 
     $firca = [Windows.Media.BrushConverter]::new().ConvertFromString($renk)
@@ -2306,13 +2340,17 @@ function Update-Gorunum {
         $null -ne $script:Veri.olcumZamani) {
         $olcumMs = $script:Veri.olcumZamani
     }
-    $yazildi = ConvertFrom-UnixSaniye ([int64]$olcumMs / 1000)
+    # Yaş artık damganın KENDİSİNDEN (unix ms) hesaplanıyor; bkz. Get-YasSn.
+    $yasSn = Get-YasSn $olcumMs
+    # Damgasız kayıt taze SAYILMASIN. Eskiden [int64]$null 1970'i veriyor,
+    # yaş devasa çıktığı için sonuç zaten $false oluyordu; artık blok hiç
+    # çalışmayabildiğinden bir önceki turun değeri asılı kalmasın diye açık yazılıyor.
+    $script:VeriTaze = $false
     # Ölçümden en az 90 sn sonra bir tur bitmişse sayı artık bir TABAN. 90 sn:
     # terminalde Stop hook'u ile statusLine yazımı aynı ana düşer, o eş zamanlı
     # çift yanlış pozitif vermesin.
     $script:KullanimSonrasi = ($script:SonOlayMs -gt ([int64]$olcumMs + 90000))
-    if ($null -ne $yazildi) {
-        $yasSn = ([DateTime]::Now - $yazildi).TotalSeconds
+    if ($null -ne $yasSn) {
         # Masaüstü kaynağı 15 dk'da bir örnekler; ona 5 dk'lık eşik uygulansa
         # sürekli "bayat" görünür. Eşik kaynağa göre.
         $bayatEsigi = switch (Get-Kaynak) {
@@ -2334,7 +2372,7 @@ function Update-Gorunum {
         # Bayat veri: soluklaştır ve yaşını yaz — güncel sanıp bakmayalım.
         if ($yasSn -gt $bayatEsigi -or $yasSn -lt -$GELECEK_PAYI_SN) {
             $Kok.Opacity = 0.45
-            $Yas.Text = Format-Yas $yazildi
+            $Yas.Text = Format-Yas $olcumMs
             $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8A33D')
             $Yas.Opacity = 1.0
         } else {
@@ -2342,8 +2380,8 @@ function Update-Gorunum {
             # Masaüstü kaynağı 15 dk'da bir örnekler; ona "canlı" demek yerine
             # gerçek yaşını yaz: "masaüstü · 7 dk önce". Terminal olay bazlı, o "canlı".
             $Yas.Text = switch (Get-Kaynak) {
-                'masaustu' { '{0} · {1}' -f (T 'KAYNAK_MASAUSTU'), (Format-Yas $yazildi) }
-                'api'      { '{0} · {1}' -f (T 'KAYNAK_API'), (Format-Yas $yazildi) }
+                'masaustu' { '{0} · {1}' -f (T 'KAYNAK_MASAUSTU'), (Format-Yas $olcumMs) }
+                'api'      { '{0} · {1}' -f (T 'KAYNAK_API'), (Format-Yas $olcumMs) }
                 default    { (T 'CANLI') }
             }
             $Yas.Foreground = [Windows.Media.BrushConverter]::new().ConvertFromString('#E8EDF5')
@@ -2570,15 +2608,20 @@ function Update-Serit {
     if ($script:VeriTaze -and $script:KullanimSonrasi -and $Serit5Yuzde.Text -ne '—') { $Serit5Yuzde.Text += ' ▲' }
     $SeritKalan.Text = if ($null -ne $bes) { Format-Kalan (ConvertFrom-UnixSaniye $bes.resets_at) } else { '' }
 
-    # Not yuvası, öncelik sırasıyla: kurulum/hesap uyarısı varsa BAYRAK, veri
-    # bayatsa YAŞ (o zaman hız tahmini de güvenilmez), taze ve hız uyarısı
-    # varsa UYARI, yoksa boş. Bayrak yaşın önünde: bayatlığı grileşen barlar
-    # zaten söylüyor, reddedilen hesabı ise bu yuva dışında hiçbir şey
-    # söylemiyor.
+    # Uyarı imi marka etiketinin altında, iki satırın ortasında duruyor --
+    # not yuvasında değil. Yuva haftalık satırının hizasında olduğu için im
+    # oraya konduğunda "haftalık ölçümün yanında hesap yazıyor" diye
+    # okunuyordu; oysa uyarı widget'ın tamamına ait.
     if ($null -ne $script:UyariKisa) {
-        $SeritYas.Text = $script:UyariKisa
-        $SeritYas.Foreground = ConvertTo-Fircasi $script:Renk.Orta
-    } elseif (-not $script:VeriTaze) {
+        $SeritUyari.Text = $script:UyariKisa
+        $SeritUyari.Visibility = 'Visible'
+    } else {
+        $SeritUyari.Visibility = 'Collapsed'
+    }
+
+    # Not yuvası, öncelik sırasıyla: veri bayatsa YAŞ (o zaman hız tahmini de
+    # güvenilmez), taze ve hız uyarısı varsa UYARI, yoksa boş.
+    if (-not $script:VeriTaze) {
         $SeritYas.Text = $Yas.Text
         $SeritYas.Foreground = ConvertTo-Fircasi $script:Renk.Orta
     } elseif ($null -ne $script:HizKisa) {
