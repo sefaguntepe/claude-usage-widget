@@ -119,7 +119,7 @@ The widget polls both files once a second. What the labels mean:
 | `38% ▲` | Claude finished a turn ≥ 90 s after that measurement (hooks fire in the desktop app too). The real value is higher; the widget will not guess by how much |
 | countdown | Shown only when the reset time is *known* (came from the terminal and that window is still open). The desktop file has none — left blank, not invented |
 | grey bars + amber age | Both sources are silent (terminal > 5 min, desktop > 20 min). The number is correct but historical |
-| `⚑ account` / `⚑ script` / `⚑ error` | Strip, compact and terminal layouts only. The full sentence lives inside the card layout; this mark means "open the card to read it". In order: one source belongs to a different account, the live-polling script was not found, the widget has a persistent internal error |
+| `⚑ script` / `⚑ error` | Strip, compact and terminal layouts only. The full sentence lives inside the card layout; this mark means "open the card to read it". In order: the live-polling script was not found, the widget has a persistent internal error |
 
 Working in the desktop app with no terminal: numbers refresh every 15 minutes,
 with `▲` filling the gaps. Want it faster for a while? Right-click the Claude
@@ -136,10 +136,16 @@ mixes two accounts' percentages into the same bar.
 One rule: **numbers from different accounts are never merged.** The authoritative
 account is **the desktop app's** — the widget shows that window. `durum.json` and
 `kota.json` are accepted only if they belong to the same organization; otherwise
-they are ignored and the card says why:
+they are ignored. There is no on-screen warning for this; the rejection is
+recorded in `gunluk.txt`:
 
-> Claude Code is signed in to a different account (…) — that source is ignored;
-> the numbers come from the desktop app account.
+> canli yoklama tavana alindi (900 sn): jeton baska hesaba ait
+
+Run with `KULLANIM_TANI=1` to see which file was rejected.
+
+Live polling can only use Claude Code's token, so on a two-account machine it can
+never produce anything for the desktop account — right-click → *Live polling →
+Off* stops the wasted requests.
 
 With a single account nothing changes. Records written by older versions of the
 scripts carry no stamp and are not rejected; the stamp appears on their next write.

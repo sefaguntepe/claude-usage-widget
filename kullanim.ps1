@@ -521,10 +521,9 @@ Bu ayarı istediğiniz zaman aynı menüden kapatabilirsiniz.
 Açmak istiyor musunuz?
 '@
         YOKLAMA_BETIK_YOK='Canlı yoklama açık ama kota-yokla.js bulunamadı — dosya kaynaklarına devam ediliyor.'
-        HESAP_UYUSMAZ='Claude Code başka bir hesapta ({0}) — o kaynak yok sayıldı, sayılar masaüstü uygulamasının hesabından.'
         TEMA_KOMPAKT='Kompakt'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
-        UYARI_KISA_HESAP='⚑ hesap'; UYARI_KISA_BETIK='⚑ betik'; UYARI_KISA_HATA='⚑ hata'
+        UYARI_KISA_BETIK='⚑ betik'; UYARI_KISA_HATA='⚑ hata'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
         SON7='SON 7 GÜN'; BUGUN='bugün {0:0.0}×'; CANLI='canlı'; TAMAM='Tamam'; KAYNAK_MASAUSTU='masaüstü'
         SONRASI_KULLANIM='Ölçümden sonra Claude en az bir tur bitirdi — gerçek değer bundan yüksek.'
@@ -569,10 +568,9 @@ You can turn this off again from the same menu at any time.
 Do you want to enable it?
 '@
         YOKLAMA_BETIK_YOK='Live polling is on but kota-yokla.js was not found — falling back to the file sources.'
-        HESAP_UYUSMAZ='Claude Code is signed in to a different account ({0}) — that source is ignored; the numbers come from the desktop app account.'
         TEMA_KOMPAKT='Compact'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5h'; SERIT_HAFTA='week'
-        UYARI_KISA_HESAP='⚑ account'; UYARI_KISA_BETIK='⚑ script'; UYARI_KISA_HATA='⚑ error'
+        UYARI_KISA_BETIK='⚑ script'; UYARI_KISA_HATA='⚑ error'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
         SON7='LAST 7 DAYS'; BUGUN='today {0:0.0}×'; CANLI='live'; TAMAM='OK'; KAYNAK_MASAUSTU='desktop'
         SONRASI_KULLANIM='Claude finished at least one turn after this measurement — the real value is higher.'
@@ -1020,7 +1018,6 @@ $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
 # yükseltme sırasında ekranı boşaltmak, yanlış hesabı göstermekten daha kötü
 # olurdu; betikler bir sonraki yazımda damgayı zaten koyar.
 $script:YetkiliHesap = $null          # masaüstü kaynağının organizasyon kimliği
-$script:RedEdilenHesap = $null        # uyuşmazlık yüzünden yok sayılan kaynağın e-postası
 
 
 function ConvertTo-Fircasi { param([string]$Renk) [Windows.Media.BrushConverter]::new().ConvertFromString($Renk) }
@@ -1774,8 +1771,11 @@ function Test-Hesap {
     if ($null -eq $script:YetkiliHesap) { return $true }
     if (-not (Test-Ozellik $Kayit 'hesap')) { return $true }
     if (-not (Test-Ozellik $Kayit.hesap 'org')) { return $true }
-    if ([string]$Kayit.hesap.org -eq [string]$script:YetkiliHesap) { return $true }
-    $script:RedEdilenHesap = $(if (Test-Ozellik $Kayit.hesap 'posta') { [string]$Kayit.hesap.posta } else { [string]$Kayit.hesap.org })
+    # Reddedilen hesap ARTIK EKRANA TASINMIYOR (kullanici istegi). Kural
+    # yerinde: yabanci hesabin sayilari hala birlestirilmiyor. Reddin izi
+    # yalnizca gunluge dusuyor -- Set-YoklamaHesapUyusmazligi'nin
+    # "jeton baska hesaba ait" satiri ve KULLANIM_TANI=1 altindaki
+    # "baska hesap, yok sayildi" satirlari.
     return $false
 }
 
@@ -1857,7 +1857,6 @@ function Merge-Kaynaklar {
 }
 
 function Read-Durum {
-    $script:RedEdilenHesap = $null   # her turda yeniden karar verilir
     Read-DurumDosyasi
     Read-Masaustu
     Read-Kota
@@ -2311,18 +2310,7 @@ function Update-Gorunum {
         $Kok.Opacity = 1.0
         $Yas.Text = ''
         $Uyari.Visibility = 'Visible'
-        # Reddetme yüzünden elde hiç veri kalmadıysa asıl sebep "veri yok"
-        # değil, "veri var ama başka hesabın". Kullanıcıya doğrusunu söyle:
-        # aksi hâlde tek göreceği şey, kaynaklar dolu dururken "henüz veri
-        # yok" yazısı olurdu.
-        $Uyari.Text = $(if ($null -ne $script:RedEdilenHesap) {
-            (T 'HESAP_UYUSMAZ') -f $script:RedEdilenHesap
-        } else { (T 'VERI_YOK') })
-        # Dar yerleşimde "—" tek başına "henüz veri yok" diye okunuyor; oysa
-        # sebep reddedilen hesap olabilir — üstteki yorumun kartta engellediği
-        # yanılgının aynısı. Gerçekten veri yoksa bayrak YANMAZ: "—" zaten
-        # doğruyu söylüyor, üstüne im basmak gürültü olurdu.
-        if ($null -ne $script:RedEdilenHesap) { $script:UyariKisa = (T 'UYARI_KISA_HESAP') }
+        $Uyari.Text = (T 'VERI_YOK')
         Update-Bar $null $Yuzde5 $Sifir5 $Dolgu5
         Update-Bar $null $YuzdeH $SifirH $DolguH
         Update-DigerYerlesim $null
@@ -2408,15 +2396,6 @@ function Update-Gorunum {
         $Uyari.Text = (T 'YOKLAMA_BETIK_YOK')
         $Uyari.Visibility = 'Visible'
         $script:UyariKisa = (T 'UYARI_KISA_BETIK')
-    }
-
-    # Kaynaklardan biri BAŞKA HESABA aitse SÖYLE. Sessizce yok saymak doğru
-    # karar ama sebebini söylememek "widget bozuldu mu?" sorusunu doğurur —
-    # yoklayıcı betiği eksik olduğunda da aynı gerekçeyle yazıyoruz.
-    if ($null -ne $script:RedEdilenHesap) {
-        $Uyari.Text = ((T 'HESAP_UYUSMAZ') -f $script:RedEdilenHesap)
-        $Uyari.Visibility = 'Visible'
-        $script:UyariKisa = (T 'UYARI_KISA_HESAP')
     }
 
     # İç hata en yüksek öncelikli: bir kez olduysa kapanana kadar görünür kalır.

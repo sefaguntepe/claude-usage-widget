@@ -144,7 +144,7 @@ Widget iki dosyaya saniyede bir bakar. Etiketlerin anlamı:
 | `38% ▲` | O ölçümden ≥ 90 sn sonra Claude bir tur bitirdi (hook'lar masaüstünde de ateşleniyor). Gerçek değer daha yüksek; widget ne kadar olduğunu uydurmaz |
 | geri sayım | Yalnızca sıfırlanma saati *bilinen* pencerede (terminalden geldi ve pencere hâlâ açık). Masaüstü dosyasında bu bilgi yok — boş kalır, uydurulmaz |
 | gri bar + amber yaş | İki kaynak da sustu (terminal > 5 dk, masaüstü > 20 dk). Sayı doğru ama tarihî |
-| `⚑ hesap` / `⚑ betik` / `⚑ hata` | Yalnızca şerit, kompakt ve terminal yerleşimlerinde. Uyarı cümlesi kart yerleşiminin içinde yaşıyor; bu im "kartı aç da tamamını oku" demek. Sırasıyla: kaynaklardan biri başka hesaba ait, canlı yoklama betigi bulunamadı, widget'ın kendi içinde ısrarlı bir hata var |
+| `⚑ betik` / `⚑ hata` | Yalnızca şerit, kompakt ve terminal yerleşimlerinde. Uyarı cümlesi kart yerleşiminin içinde yaşıyor; bu im "kartı aç da tamamını oku" demek. Sırasıyla: canlı yoklama betiği bulunamadı, widget'ın kendi içinde ısrarlı bir hata var |
 
 Terminal açmadan masaüstünde çalışıyorsanız: sayı 15 dk'da bir yenilenir,
 aradaki boşluğu `▲` doldurur. Bir süre daha sık istiyorsanız Claude tepsi
@@ -161,10 +161,16 @@ yüzdeleri aynı barda karışır.
 Kural tek cümle: **farklı hesapların sayıları asla birleştirilmez.** Yetkili
 hesap **masaüstü uygulamasınınkidir** — widget onun penceresini gösterir.
 `durum.json` ve `kota.json` ancak aynı organizasyona aitse kabul edilir; değilse
-yok sayılır ve kartta sebebi yazar:
+yok sayılır. Ekranda bunun için bir uyarı çıkmaz; reddin izi `gunluk.txt`'de
+durur:
 
-> Claude Code başka bir hesapta (…) — o kaynak yok sayıldı, sayılar masaüstü
-> uygulamasının hesabından.
+> canli yoklama tavana alindi (900 sn): jeton baska hesaba ait
+
+Hangi dosyanın reddedildiğini görmek için `KULLANIM_TANI=1` ile çalıştırın.
+
+Canlı yoklama yalnızca Claude Code'un jetonunu kullanabildiği için, iki hesaplı
+bir makinede masaüstü hesabı için hiçbir şey üretemez — sağ tık → *Canlı yoklama
+→ Kapalı* ile kapatmak boşa giden istekleri bitirir.
 
 Tek hesap kullanıyorsanız hiçbir şey değişmez. Damgası olmayan eski kayıtlar da
 reddedilmez; betikler bir sonraki yazımda damgayı koyar.
