@@ -69,17 +69,13 @@ change it. Right-click → *Live polling (API)*.
 | Makes network calls | **No** | Yes, every 60–300 s |
 | Latency | Instant in a terminal session; up to 15 min in a desktop-only session | ~60 s |
 
-**Enabling live polling is a real trade, so read this before you do it.** The
-OAuth token it reads is *not* narrowly scoped — its scopes include
-`user:inference`, so anyone who obtains it can run inference as you and spend
-your quota. There is no read-only-usage scope to ask for. On a work or
-corporate machine this is not recommended: a background process holding a
-credential and calling an external API on a timer is exactly the pattern
-endpoint protection software flags. The widget states all of this in a
-confirmation dialog the first time you switch it on, and the setting is
-remembered per user, never defaulted on.
+Live polling reads Claude Code's OAuth access token. That token is not
+scoped down to usage — its scopes include `user:inference`, so it can do
+anything your Claude Code session can, and there is no read-only-usage scope
+to request instead. The widget shows this in a confirmation dialog the first
+time you switch it on; the setting is per user and never on by default.
 
-How the split is built, and why:
+The implementation keeps that surface as small as it can:
 
 - **The widget never sees the token.** Polling happens in a separate script,
   `kota-yokla.js`, which writes its result to `kota.json`. The widget reads
@@ -246,11 +242,9 @@ terminal Claude Code session you are actively using, or the Claude desktop app
    (`pollRequiresTrayOpenWithinHours`); if samples ever stop, click the tray
    icon once.
 
-Deliberately **not** done: calling the usage API with your OAuth token (as
-some monitors do). The token's scopes include `user:inference` — it is a full
-account credential, not a read-only one — and Windows Credential Manager is
-readable by any process in your session. Reading a file the app already writes
-gets the same numbers with none of that.
+Calling the usage API directly is available as the opt-in *Live polling* mode
+described above, and off by default. Both paths return the same numbers from
+the same endpoint; the difference is latency, and whether a token is involved.
 
 Two further limits:
 

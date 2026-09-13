@@ -1,28 +1,21 @@
 #!/usr/bin/env node
 /*
- * OPSIYONEL — VARSAYILAN OLARAK KAPALI. Bu betik, widget'in "canli yoklama"
- * secenegi acilmadikca HIC CALISTIRILMAZ.
+ * Widget'in "canli yoklama" secenegi. Varsayilan olarak KAPALIDIR ve secenek
+ * acilmadikca bu betik hic calistirilmaz.
  *
- * ============================================================================
- *  ACMADAN ONCE OKUYUN
- * ============================================================================
- * Bu betik Claude Code'un OAuth ERISIM JETONUNU okur ve resmi kullanim ucuna
- * (api.anthropic.com/api/oauth/usage) salt-okur bir istek atar. O jeton DAR
- * YETKILI DEGILDIR: kapsamlari arasinda `user:inference` vardir, yani jetonu
- * ele geciren sizin adiniza cikarim calistirabilir ve kotanizi harcayabilir.
- * Istenebilecek "yalnizca kullanimi oku" diye bir kapsam yoktur.
+ * Ne yapar: Claude Code'un OAuth erisim jetonunu okur, resmi kullanim ucuna
+ * (api.anthropic.com/api/oauth/usage) salt-okur bir GET atar, iki yuzdeyi
+ * kota.json'a yazar ve cikar. Kazanc, masaustu oturumlarinda ~15 dakikalik
+ * gecikmenin ~60 saniyeye inmesi.
  *
- * Widget'in VARSAYILAN calisma bicimi bu DEGILDIR. Varsayilanda widget yalnizca
- * Claude'un zaten diske yazdigi iki dosyayi okur, hicbir kimlik bilgisine
- * dokunmaz, aga cikmaz. Bu betik o kurali kullanicinin acik tercihiyle gevsetir;
- * kazanc, masaustu oturumlarinda ~15 dakikalik gecikmenin ~60 saniyeye inmesidir.
- *
- * Kurumsal / is bilgisayarinda ONERILMEZ: kimlik bilgisi tutup duzenli
- * araliklarla dis API'ye cikan arka plan sureci, uc nokta koruma
- * yazilimlarinin isaretledigi bir desendir.
+ * Jeton hakkinda bilinmesi gereken: kullanim bilgisiyle sinirli degildir --
+ * kapsamlari arasinda `user:inference` vardir, yani Claude Code oturumunun
+ * yapabildigi her seyi yapabilir. Istenebilecek "yalnizca kullanimi oku" diye
+ * bir kapsam yoktur. Widget'in varsayilan calismasi bunu gerektirmez: orada
+ * yalnizca Claude'un zaten diske yazdigi dosyalar okunur, jetona dokunulmaz.
  *
  * ---------------------------------------------------------------------------
- *  TASARIM KARARLARI — hepsi riski kucultmek icin
+ *  TASARIM KARARLARI — jeton yuzeyini kucuk tutmak icin
  * ---------------------------------------------------------------------------
  * 1. WIDGET JETONU HIC GORMEZ. Yokla-yaz isi bu ayri surecte olur; widget
  *    sonucu kota.json'dan okur, tipki diger iki kaynak gibi. Sir tasiyan kod

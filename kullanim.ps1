@@ -441,13 +441,11 @@ oturumlarında 15 dakikaya kadar.
 AÇIK: Ayrı bir betik, Claude Code''un OAuth erişim jetonunu okuyup resmi
 kullanım ucuna salt-okur istek atar. Gecikme ~{0} saniyeye iner.
 
-BİLMENİZ GEREKEN: O jeton DAR YETKİLİ DEĞİLDİR. Kapsamları arasında
-"user:inference" vardır — jetonu ele geçiren sizin adınıza çıkarım
-çalıştırabilir ve kotanızı harcayabilir.
+Jeton hakkında: kullanım bilgisiyle sınırlı değildir — kapsamları arasında
+"user:inference" vardır, yani Claude Code oturumunuzun yapabildiği her şeyi
+yapabilir.
 
-Kurumsal / iş bilgisayarında ÖNERİLMEZ: kimlik bilgisi tutup düzenli aralıklarla
-dış API''ye çıkan arka plan süreci, uç nokta koruma yazılımlarının işaretlediği
-bir desendir.
+Bu ayarı istediğiniz zaman aynı menüden kapatabilirsiniz.
 
 Açmak istiyor musunuz?
 '@
@@ -490,13 +488,10 @@ in desktop sessions.
 ON: A separate script reads Claude Code''s OAuth access token and makes a
 read-only request to the official usage endpoint. Latency drops to ~{0} seconds.
 
-WHAT YOU SHOULD KNOW: That token is NOT narrowly scoped. Its scopes include
-"user:inference" — anyone who obtains it can run inference as you and spend
-your quota.
+About the token: it is not scoped down to usage — its scopes include
+"user:inference", so it can do anything your Claude Code session can.
 
-NOT RECOMMENDED on a work or corporate machine: a background process holding a
-credential and making periodic calls to an external API is exactly the pattern
-endpoint protection software flags.
+You can turn this off again from the same menu at any time.
 
 Do you want to enable it?
 '@

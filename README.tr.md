@@ -96,16 +96,14 @@ Sağ tık → *Canlı yoklama (API)*.
 | Ağa çıkar mı | **Hayır** | Evet, 60–300 sn'de bir |
 | Gecikme | Terminal oturumunda anında; yalnızca masaüstü kullanılıyorsa 15 dk'ya kadar | ~60 sn |
 
-**Canlı yoklamayı açmak gerçek bir takas, açmadan önce şunu okuyun.** Okuduğu
-OAuth jetonu dar yetkili *değildir* — kapsamları arasında `user:inference`
-vardır, yani jetonu ele geçiren sizin adınıza çıkarım çalıştırabilir ve
-kotanızı harcayabilir. İstenebilecek "yalnızca kullanımı oku" diye bir kapsam
-yok. Kurumsal / iş bilgisayarında önerilmez: kimlik bilgisi tutup zamanlayıcıyla
-dış API'ye çıkan arka plan süreci, uç nokta koruma yazılımlarının işaretlediği
-desendir. Widget bunların hepsini ilk açışta bir onay penceresinde söyler; ayar
-kullanıcı başına hatırlanır ve asla varsayılan olarak açık gelmez.
+Canlı yoklama, Claude Code'un OAuth erişim jetonunu okur. O jeton kullanım
+bilgisiyle sınırlı değildir — kapsamları arasında `user:inference` vardır,
+yani Claude Code oturumunuzun yapabildiği her şeyi yapabilir; istenebilecek
+"yalnızca kullanımı oku" diye bir kapsam da yoktur. Widget bunu ilk açışta bir
+onay penceresinde gösterir; ayar kullanıcı başınadır ve varsayılan olarak
+kapalıdır.
 
-Ayrım nasıl kurulmuş, ve neden:
+Uygulama bu yüzeyi olabildiğince küçük tutuyor:
 
 - **Widget jetonu hiç görmez.** Yoklama ayrı bir betikte (`kota-yokla.js`)
   olur, sonucu `kota.json`'a yazar; widget o dosyayı diğer ikisi gibi okur.
