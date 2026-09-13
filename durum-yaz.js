@@ -71,6 +71,37 @@ function jsonOku(p, varsayilan) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { return varsayilan; }
 }
 
+/* BU KAYIT HANGI HESABA AIT?
+
+   Bir makinede birden fazla Claude hesabi olabilir: Claude Code bir hesaba,
+   masaustu uygulamasi baskasina bagli olabilir. Widget uc kaynagi birlestirdigi
+   icin, hesap damgasi olmadan iki hesabin yuzdeleri ayni barda karisiyor --
+   uretimde tam olarak bu oldu: masaustu %81 derken API %4 diyordu ve bar
+   ikisi arasinda gidip geliyordu.
+
+   Kimlik olarak ORGANIZASYON kimligi kullaniliyor; masaustu uygulamasinin
+   kendi gecmis dosyasinda ortak olarak bulunan tek alan o (`samples[].org`).
+   E-posta yalnizca kullaniciya gosterilmek icin tasiniyor.
+
+   ~/.claude.json buyuk olabilir (proje gecmisi de orada). Her render'da
+   MB'lik bir JSON ayristirmamak icin ham metinde isaretlenen yerden kucuk bir
+   dilim alinip orada aranir. */
+function hesapOku() {
+  let ham;
+  try {
+    ham = fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8');
+  } catch (e) {
+    return null;
+  }
+  const i = ham.indexOf('"oauthAccount"');
+  if (i === -1) return null;
+  const dilim = ham.slice(i, i + 2048);
+  const org = /"organizationUuid"\s*:\s*"([^"]+)"/.exec(dilim);
+  if (!org) return null;
+  const posta = /"emailAddress"\s*:\s*"([^"]+)"/.exec(dilim);
+  return { org: org[1], posta: posta ? posta[1] : null };
+}
+
 /* Atomik yazma. Iki nokta onemli:
 
    1) Gecici dosya adi SURECE OZEL. Sabit bir '.tmp' adini butun oturumlar
@@ -344,6 +375,7 @@ function main() {
     jsonYaz(DOSYA, {
       yazildi: simdi,
       olcumZamani: olcumZamani,
+      hesap: hesapOku(),
       five_hour: b5.p,
       seven_day: b7.p,
       hiz: hiz,

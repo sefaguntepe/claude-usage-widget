@@ -54,6 +54,19 @@ const os = require('os');
 
 const KLASOR = path.join(process.env.APPDATA || os.homedir(), 'ClaudeKullanim');
 const DOSYA = path.join(KLASOR, 'kota.json');
+
+/* HATA AYRI DOSYAYA YAZILIR -- kota.json'a DEGIL.
+
+   Eskiden her hata kota.json'un ustune yaziliyordu ve son IYI olcum yok
+   oluyordu. Uretimde uc nokta her iki yoklamadan birinde 429 donuyordu; her
+   429'da widget API kaynagini kaybedip dosya kaynaklarina dusuyor, sonraki
+   basarili yoklamada geri donuyordu. Ekranda bu, sayilarin iki dakikada bir
+   ZIPLAMASI olarak goruluyordu -- kullanici bunu "yenilenmiyor" diye okur.
+
+   Artik kota.json yalnizca basarili olcumle guncellenir; hata gecici bir
+   durumdur ve kendi dosyasinda durur. Son iyi olcum yerinde kalir ve normal
+   bayatlik kurallariyla zaten yaslanir. */
+const HATA_DOSYA = path.join(KLASOR, 'kota-hata.json');
 const KIMLIK = path.join(os.homedir(), '.claude', '.credentials.json');
 
 const UC = 'https://api.anthropic.com/api/oauth/usage';
@@ -85,18 +98,52 @@ function jetonOku() {
   return { jeton: o.accessToken };
 }
 
+/* BU OLCUM HANGI HESABA AIT?
+
+   Bir makinede birden fazla Claude hesabi olabilir: Claude Code bir hesaba,
+   masaustu uygulamasi baskasina bagli olabilir. Widget uc kaynagi birlestirdigi
+   icin, hesap damgasi olmadan iki hesabin yuzdeleri ayni barda karisir --
+   uretimde tam olarak bu oldu: masaustu %81 derken bu uc %4 diyordu.
+
+   Kimlik olarak ORGANIZASYON kimligi kullaniliyor; masaustu uygulamasinin
+   gecmis dosyasinda ortak olarak bulunan tek alan o (`samples[].org`).
+
+   Jetonun kendisi burada da gorulmez: okunan dosya ~/.claude.json, kimlik
+   dosyasi degil. */
+function hesapOku() {
+  let ham;
+  try {
+    ham = fs.readFileSync(path.join(os.homedir(), '.claude.json'), 'utf8');
+  } catch (e) {
+    return null;
+  }
+  const i = ham.indexOf('"oauthAccount"');
+  if (i === -1) return null;
+  const dilim = ham.slice(i, i + 2048);
+  const org = /"organizationUuid"\s*:\s*"([^"]+)"/.exec(dilim);
+  if (!org) return null;
+  const posta = /"emailAddress"\s*:\s*"([^"]+)"/.exec(dilim);
+  return { org: org[1], posta: posta ? posta[1] : null };
+}
+
 /* Atomik yazma: gecici ad surece ozel (sabit '.tmp' adini butun yazicilar
    paylasiyordu), basarisizlikta canli dosyaya YAZILMAZ -- widget saniyede bir
    okuyor, yarim dosya gostermektense bir tur beklemek dogru. */
-function jsonYaz(veri) {
-  const tmp = `${DOSYA}.${process.pid}.tmp`;
+function jsonYaz(hedef, veri) {
+  const tmp = `${hedef}.${process.pid}.tmp`;
   try {
     fs.mkdirSync(KLASOR, { recursive: true });
     fs.writeFileSync(tmp, JSON.stringify(veri), 'utf8');
-    fs.renameSync(tmp, DOSYA);
+    fs.renameSync(tmp, hedef);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (e2) { /* zaten yok */ }
   }
+}
+
+/* Basarili yoklamadan sonra hata dosyasi KALDIRILIR. Kalsaydi widget, cozulmus
+   bir hatayi surekli yeni sanip geri cekilmeye devam ederdi. */
+function hataTemizle() {
+  try { fs.unlinkSync(HATA_DOSYA); } catch (e) { /* zaten yok */ }
 }
 
 /* YALNIZCA durum kodu yazilir; govde ve basliklar asla (tasarim karari 3).
@@ -110,7 +157,7 @@ function jsonYaz(veri) {
 const YEREL_HATALAR = ['kimlik-yok', 'jeton-yok', 'jeton-suresi-dolmus'];
 
 function durumYaz(hata, kod) {
-  jsonYaz({
+  jsonYaz(HATA_DOSYA, {
     yazildi: Date.now(),
     hata: hata,
     http: kod === undefined ? null : kod,
@@ -180,7 +227,7 @@ async function main() {
         }
       }
     }
-    jsonYaz({ yazildi: Date.now(), hata: 'http', http: yanit.status, tekrarSn: bekle });
+    jsonYaz(HATA_DOSYA, { yazildi: Date.now(), hata: 'http', http: yanit.status, tekrarSn: bekle });
     return;
   }
 
@@ -192,13 +239,15 @@ async function main() {
   if (!bes && !haf) { durumYaz('alan-yok'); return; }
 
   const simdi = Date.now();
-  jsonYaz({
+  jsonYaz(DOSYA, {
     yazildi: simdi,
     olcumZamani: simdi,   // ucun yaniti taze: olcum ani = simdi
+    hesap: hesapOku(),
     five_hour: bes,
     seven_day: haf,
     kaynak: 'api',
   });
+  hataTemizle();
 }
 
 main().catch(() => durumYaz('beklenmeyen'));

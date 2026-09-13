@@ -200,7 +200,16 @@ $MasaustuDosya = Join-Path $env:APPDATA 'Claude\plan-usage-history.json'
 #
 # Bu seçenek AÇIKÇA açılmadıkça hiçbir şey değişmez: kota-yokla.js
 # çalıştırılmaz, kota.json okunmaz.
-$KotaDosya = Join-Path $VeriKlasor 'kota.json'         # yoklayıcı yazar
+$KotaDosya = Join-Path $VeriKlasor 'kota.json'         # yoklayıcı yazar (yalnızca BAŞARILI ölçüm)
+
+# Yoklama hatası artık kota.json'u EZMİYOR, kendi dosyasında duruyor.
+# Eskiden her hata son iyi ölçümün üstüne yazılıyordu; uç nokta her iki
+# yoklamadan birinde 429 dönünce widget API kaynağını kaybedip dosya
+# kaynaklarına düşüyor, sonraki başarılı yoklamada geri dönüyordu. Ekranda bu,
+# sayıların iki dakikada bir ZIPLAMASI olarak görünüyordu — ve kullanıcı bunu
+# "yenilenmiyor" diye okuyor. Son iyi ölçüm artık yerinde kalır; bayatlık
+# kuralları onu zaten yaşlandırır.
+$KotaHataDosya = Join-Path $VeriKlasor 'kota-hata.json'
 $YoklayiciBetik = Join-Path $PSScriptRoot 'kota-yokla.js'
 
 # Açılışta başlatma kısayolu. Menüden açılıp kapatılabiliyor, o yüzden yolu
@@ -213,6 +222,7 @@ $BaslangicKisayolu = if ($env:KULLANIM_BASLANGIC_YOL) { $env:KULLANIM_BASLANGIC_
 $API_BAYAT_SN = 300     # API ölçümü bu kadar sonra bayat sayılır
 $YOKLAMA_SECENEKLERI = @(0, 60, 120, 300)   # 0 = kapalı
 $YOKLAMA_TAVAN_SN = 900   # geri çekilmenin üst sınırı
+$YOKLAMA_INIS_BASARI = 10 # tabanı bir kademe indirmeden önce gereken ardışık başarı
 
 $OLAY_OMUR_SN  = 900    # olay satırı 15 dk sonra kaybolur
 $YANIP_SONME_SN = 12    # ilk 12 saniye dikkat çeksin diye yanıp söner
@@ -450,6 +460,7 @@ Bu ayarı istediğiniz zaman aynı menüden kapatabilirsiniz.
 Açmak istiyor musunuz?
 '@
         YOKLAMA_BETIK_YOK='Canlı yoklama açık ama kota-yokla.js bulunamadı — dosya kaynaklarına devam ediliyor.'
+        HESAP_UYUSMAZ='Claude Code başka bir hesapta ({0}) — o kaynak yok sayıldı, sayılar masaüstü uygulamasının hesabından.'
         TEMA_KOMPAKT='Kompakt'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5sa'; SERIT_HAFTA='hafta'
         BASLIK='CLAUDE KULLANIM'; ETIKET_5SAAT='5 saatlik limit'; ETIKET_HAFTA='Haftalık'
@@ -496,6 +507,7 @@ You can turn this off again from the same menu at any time.
 Do you want to enable it?
 '@
         YOKLAMA_BETIK_YOK='Live polling is on but kota-yokla.js was not found — falling back to the file sources.'
+        HESAP_UYUSMAZ='Claude Code is signed in to a different account ({0}) — that source is ignored; the numbers come from the desktop app account.'
         TEMA_KOMPAKT='Compact'; TEMA_TERMINAL='Terminal'
         SERIT_5SA='5h'; SERIT_HAFTA='week'
         BASLIK='CLAUDE USAGE'; ETIKET_5SAAT='5-hour limit'; ETIKET_HAFTA='Weekly'
@@ -804,6 +816,30 @@ $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x
 function Get-Ogesi { param([string]$Ad) $win.FindName($Ad) }
 
 # Tanı günlüğü — yalnızca KULLANIM_TANI=1 iken yazar
+# TICK HATALARI SESSİZ KALMAMALI.
+#
+# Tick'teki catch'lerin hepsi yalnızca Write-Tani'ye yazıyordu; o da
+# KULLANIM_TANI=1 yoksa hiçbir şey yapmıyor. Update-Gorunum her turda patlasa
+# bile kalıcı günlükte tek satır olmuyordu: "çalışıyor ama yenilenmiyor"
+# şikâyetinde elimizde hiçbir kanıt kalmıyordu.
+#
+# Artık kalıcı günlüğe de yazılıyor. Saniyede bir tekrarlayan bir hata 300
+# satırlık dosyayı boğmasın diye AYNI mesaj dakikada bir kez kaydediliyor.
+$script:TickHataSon = @{}
+function Write-TickHatasi {
+    param([string]$Nerede, [string]$Mesaj)
+    Write-Tani ("HATA {0}: {1}" -f $Nerede, $Mesaj)
+
+    $anahtar = '{0}|{1}' -f $Nerede, $Mesaj
+    $simdi = [DateTime]::Now
+    if ($script:TickHataSon.ContainsKey($anahtar) -and
+        ($simdi - $script:TickHataSon[$anahtar]).TotalSeconds -lt 60) { return }
+    $script:TickHataSon[$anahtar] = $simdi
+
+    Write-Kayit ("TICK HATASI {0}: {1}" -f $Nerede, $Mesaj)
+    $script:IcHata = $true      # ekranda da görünsün
+}
+
 function Write-Tani {
     param([string]$Mesaj)
     if ($env:KULLANIM_TANI -ne '1') { return }
@@ -846,16 +882,43 @@ $script:Masaustu = $null             # masaüstü uygulamasından son örnek + t
 $script:MasaustuSonYazma = [datetime]::MinValue
 $script:Kota = $null                  # canlı yoklama sonucu (opsiyonel kaynak)
 $script:KotaSonYazma = [datetime]::MinValue
+$script:KotaHataSonYazma = [datetime]::MinValue
 $script:SonYoklama = [datetime]::MinValue
 $script:YoklayiciUyarildi = $false
 $script:YoklamaAralik = 0     # yürürlükteki aralık (geri çekilmeyle büyür)
+# UYARLANABİLİR TABAN — geri çekilmenin yakınsaması için.
+#
+# Eski kural "başarıda aralığı yarıya indir, tabana kadar" idi. Taban 60 iken
+# 120'nin yarısı tam tabana düşüyor, oradan anında yine 429 geliyor: günlükte
+# saatte ~20 kez tekrarlayan sonsuz 60↔120 salınımı. Salınımı bitirmek için
+# BAŞARISIZ OLDUĞU KANITLANAN aralık taban olarak yükseltilir; koşullar
+# düzelirse yeterince ardışık başarıdan sonra bir kademe geri inilir.
+$script:YoklamaTaban = 0      # yürürlükteki alt sınır (kullanıcı ayarından küçük olamaz)
+$script:ArdisikBasari = 0     # tabanı indirmeyi denemek için sayaç
 $script:HizKisa = $null               # dar yerleşimler için kısa hız uyarısı
 $script:IcHata = $false               # yakalanmış iç hata oldu mu (kalıcı)
 $script:Baslangic = [DateTime]::Now   # kalp atışı için
 $script:VurguBitis = $null            # "kendini göster" vurgusunun bitiş anı
 $script:SonOlayMs = [int64]0          # hook'un yazdığı son olayın zamanı
+$script:OlayHam = $null               # olay.json'un çözümlenmiş son hâli
+$script:OlaySonYazma = [datetime]::MinValue
 $script:KullanimSonrasi = $false     # ölçümden sonra Claude tur bitirdi mi
 $script:VeriTaze = $false    # veri hiç okunmadan uyarı tetiklenmesin
+
+# HESAP KİMLİĞİ — kaynaklar aynı hesaba ait olmak ZORUNDA.
+#
+# Bir makinede birden fazla Claude hesabı olabilir: Claude Code bir hesaba,
+# masaüstü uygulaması başkasına bağlı olabilir. Üç kaynağı "aynı gerçeğin
+# fotoğrafı" saymak o zaman yanlış oluyor — üretimde masaüstü %81 derken API
+# %4 diyordu ve bar ikisi arasında gidip geliyordu.
+#
+# Yetkili hesap MASAÜSTÜ UYGULAMASININ hesabıdır: widget onun penceresini
+# gösterir. Diğer kaynaklar ancak aynı organizasyona aitse kabul edilir.
+# Damgası olmayan (eski sürüm betiklerin yazdığı) kayıt reddedilmez —
+# yükseltme sırasında ekranı boşaltmak, yanlış hesabı göstermekten daha kötü
+# olurdu; betikler bir sonraki yazımda damgayı zaten koyar.
+$script:YetkiliHesap = $null          # masaüstü kaynağının organizasyon kimliği
+$script:RedEdilenHesap = $null        # uyuşmazlık yüzünden yok sayılan kaynağın e-postası
 
 
 function ConvertTo-Fircasi { param([string]$Renk) [Windows.Media.BrushConverter]::new().ConvertFromString($Renk) }
@@ -953,7 +1016,11 @@ function Set-TemaKonumu {
 # Her yerleşim kendi konumunu tutar; ortak tek konum olsaydı her geçişte
 # biri kayardı. Anahtarlar: kart -> sol/ust, diğerleri -> <ön ek>Sol/<ön ek>Ust.
 function Get-KonumAnahtari {
-    $onek = $YERLESIMLER[$script:Ayar.tema].Onek
+    # Ayar dosyası elle düzenlenmiş olabilir; tanınmayan yerleşim adı burada
+    # null başvuruya dönüşmesin. Set-Tema da aynı şekilde karta düşüyor.
+    $ad = [string]$script:Ayar.tema
+    if (-not $YERLESIMLER.Contains($ad)) { $ad = 'kart' }
+    $onek = $YERLESIMLER[$ad].Onek
     if ($onek -eq '') { return @('sol', 'ust') }
     return @(($onek + 'Sol'), ($onek + 'Ust'))
 }
@@ -1013,7 +1080,7 @@ function Read-DurumDosyasi {
     if (-not (Test-Path $DurumDosya)) { $script:DurumHam = $null; return }
     try {
         $bilgi = Get-Item $DurumDosya
-        if ($bilgi.LastWriteTime -le $script:SonYazma) { return }   # değişmediyse okuma
+        if ($bilgi.LastWriteTime -eq $script:SonYazma) { return }   # değişmediyse okuma
         $script:DurumHam = Get-Content $DurumDosya -Raw -Encoding UTF8 | ConvertFrom-Json
         $script:SonYazma = $bilgi.LastWriteTime
     } catch {
@@ -1060,19 +1127,76 @@ function Get-MasaustuHiz {
     return [pscustomobject]@{ yuzdeDk = $yuzdeDk; bitisDk = [int][Math]::Round((100 - $Fh) / $yuzdeDk) }
 }
 
+# SON 7 GÜN GRAFİĞİNİ MASAÜSTÜ SERİSİNDEN TÜRET
+#
+# `haftalik` yalnızca durum.json'da vardı, onu da yalnızca terminaldeki
+# statusLine yazıyor. Masaüstünde çalışan bir kullanıcıda grafik son terminal
+# oturumunda donup kalıyor — üstelik birleştirme taze kazananın damgasını
+# kaydın tamamına vurduğu için ekran "api · şimdi" derken grafiğin verisi
+# günler öncesine ait oluyordu. Kartın en görünür parçası buydu.
+#
+# Veri zaten elimizde: masaüstü dosyası 30 günlük örnek tutuyor. Semantik
+# durum-yaz.js'teki gecmisIsle ile AYNI: günlük tüketim, 5 saatlik pencerenin
+# ARTIŞLARININ toplamıdır; pencere sıfırlandığında (değer düştüğünde) yeni
+# değerin kendisi eklenir.
+#
+# Fark: masaüstü 15 dakikada bir örnekliyor, statusLine 60 saniyede bir. İki
+# örnek arasına sığan bir sıfırlanma görülmez, yani bu toplam bir ALT SINIR.
+# Yanlış değil, eksik — ve donmuş bir grafikten kat kat iyi.
+function Get-MasaustuHaftalik {
+    param($Ornekler)
+
+    $gunler = @{}
+    $onceki = $null
+    foreach ($o in $Ornekler) {
+        if (-not (Test-Ozellik $o.u 'fh')) { continue }
+        $fh = [double]$o.u.fh
+        if ($null -ne $onceki) {
+            $fark = $fh - $onceki
+            $eklenecek = if ($fark -ge 0) { $fark } else { $fh }
+            if ($eklenecek -gt 0) {
+                $anahtar = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$o.t).LocalDateTime.ToString('yyyy-MM-dd')
+                if (-not $gunler.ContainsKey($anahtar)) { $gunler[$anahtar] = @{ tuketim = 0.0; zirve = 0.0 } }
+                $gunler[$anahtar].tuketim += $eklenecek
+                if ((Test-Ozellik $o.u 'sd') -and [double]$o.u.sd -gt $gunler[$anahtar].zirve) {
+                    $gunler[$anahtar].zirve = [double]$o.u.sd
+                }
+            }
+        }
+        $onceki = $fh
+    }
+
+    $bugun = [DateTime]::Now.Date
+    $liste = @()
+    for ($i = 6; $i -ge 0; $i--) {
+        $anahtar = $bugun.AddDays(-$i).ToString('yyyy-MM-dd')
+        $g = $gunler[$anahtar]
+        $liste += [pscustomobject]@{
+            gun     = $anahtar
+            tuketim = $(if ($null -eq $g) { 0.0 } else { [Math]::Round($g.tuketim, 1) })
+            zirve   = $(if ($null -eq $g) { 0.0 } else { [Math]::Round($g.zirve, 0) })
+        }
+    }
+    return $liste
+}
+
 function Read-Masaustu {
     if (-not (Test-Path $MasaustuDosya)) { $script:Masaustu = $null; return }
     try {
         $bilgi = Get-Item $MasaustuDosya
-        if ($bilgi.LastWriteTime -le $script:MasaustuSonYazma) { return }
+        if ($bilgi.LastWriteTime -eq $script:MasaustuSonYazma) { return }
         $j = Get-Content $MasaustuDosya -Raw -Encoding UTF8 | ConvertFrom-Json
-        $script:MasaustuSonYazma = $bilgi.LastWriteTime
 
         # Şema kapısı: bildiğimiz biçim değilse hiç yorumlamaya kalkma.
+        #
+        # DİKKAT: mtime damgası buradan SONRA basılıyor. Önce basılıyordu ve
+        # doğrulamayı geçemeyen dosya "görüldü" sayılıp bir daha okunmuyordu;
+        # yarım yazılmış tek bir dosya kaynağı kalıcı olarak susturabiliyordu.
         if (-not (Test-Ozellik $j 'version') -or [int]$j.version -ne 2 -or -not (Test-Ozellik $j 'samples')) {
             Write-Tani 'masaustu: sema uyumsuz, yok sayildi'
             $script:Masaustu = $null; return
         }
+        $script:MasaustuSonYazma = $bilgi.LastWriteTime
         # Süzme örnek listesinin TAMAMINA uygulanıyor: hız hesabı ve pencere
         # başlangıcı da bu seriden türüyor, ileri tarihli tek örnek ikisini de
         # bozardı.
@@ -1087,15 +1211,25 @@ function Read-Masaustu {
 
         $fh = if (Test-Ozellik $son.u 'fh') { [double]$son.u.fh } else { $null }
         $sd = if (Test-Ozellik $son.u 'sd') { [double]$son.u.sd } else { $null }
+
+        # YETKİLİ HESAP burada belirleniyor. Masaüstü uygulaması hangi hesaba
+        # bağlıysa widget onun penceresini gösterir; diğer kaynaklar ancak aynı
+        # organizasyona aitse kabul edilir. Alan dosyada zaten vardı, yalnızca
+        # okunmuyordu.
+        $org = if (Test-Ozellik $son 'org') { [string]$son.org } else { $null }
+        $script:YetkiliHesap = $org
+
         $script:Masaustu = [pscustomobject]@{
             t   = [int64]$son.t
             fh  = $fh
             sd  = $sd
+            org = $org
             hiz = $(if ($null -ne $fh) { Get-MasaustuHiz -Ornekler $ornekler -SimdiMs ([int64]$son.t) -Fh $fh } else { $null })
+            haftalik = Get-MasaustuHaftalik -Ornekler $ornekler
             pencere5 = Get-PencereBaslangici -Ornekler $ornekler -Alan 'fh'
             pencereH = Get-PencereBaslangici -Ornekler $ornekler -Alan 'sd'
         }
-        Write-Tani ("masaustu: t={0} fh={1} sd={2} ornek={3}" -f $son.t, $fh, $sd, $ornekler.Count)
+        Write-Tani ("masaustu: t={0} fh={1} sd={2} ornek={3} org={4}" -f $son.t, $fh, $sd, $ornekler.Count, $org)
     } catch {
         Write-Tani ("masaustu: okuma hatasi " + $_.Exception.Message)
     }
@@ -1109,49 +1243,16 @@ function Read-Kota {
     if (-not (Test-Path $KotaDosya)) { $script:Kota = $null; return }
     try {
         $bilgi = Get-Item $KotaDosya
-        if ($bilgi.LastWriteTime -le $script:KotaSonYazma) { return }
+        if ($bilgi.LastWriteTime -eq $script:KotaSonYazma) { return }
         $j = Get-Content $KotaDosya -Raw -Encoding UTF8 | ConvertFrom-Json
         $script:KotaSonYazma = $bilgi.LastWriteTime
 
-        if (Test-Ozellik $j 'hata') {
-            # UYARLANABİLİR GERİ ÇEKİLME
-            #
-            # Uç nokta üçüncü-parti yoklamayı sınırlıyor: 60 saniyede bir
-            # vurmak 429 dönüyor ve hiçbir veri gelmiyor. Her hatada aralık
-            # ikiye katlanıyor, tavanda duruyor; ilk başarılı yoklamada
-            # kullanıcının seçtiği tabana geri dönüyor.
-            #
-            # Sunucu Retry-After söylediyse ONA uyulur — bizim ikiye
-            # katlamamızdan daha bilgili bir sayıdır.
-            $taban = [int]$script:Ayar.canliYoklama
+        # ESKİ BİÇİM. Hata kaydı bir zamanlar kota.json'un üstüne yazılıyordu;
+        # artık kota-hata.json'a gidiyor. Yükseltmeden önce kalmış böyle bir
+        # dosyaya denk gelebiliriz — veri değil, yok say. Bir sonraki başarılı
+        # yoklama üstüne yazar.
+        if (Test-Ozellik $j 'hata') { $script:Kota = $null; return }
 
-            # YEREL hatada geri ÇEKİLME: jeton süresi dolmuş, kimlik dosyası
-            # yok gibi durumlarda yoklayıcı hiç istek atmıyor — idare edilecek
-            # bir uzak çağrı yok. Üstel geri çekilme burada yalnızca zarar
-            # veriyordu: durum her an kendiliğinden düzelebilir (Claude Code
-            # kullanıldıkça jetonu tazeler) ve 900 saniyeye çıkmış bir aralık
-            # bunu 15 dakika geç fark eder. Kullanıcının seçtiği aralıkta kal.
-            if ((Test-Ozellik $j 'yerel') -and $j.yerel) {
-                if ($script:YoklamaAralik -ne $taban) {
-                    Write-Kayit ("canli yoklama tabana alindi ({0} sn): yerel durum, ag istegi yok ({1})" -f `
-                        $taban, [string]$j.hata)
-                }
-                $script:YoklamaAralik = $taban
-                $script:Kota = $null; return
-            }
-
-            $yeni = if ($script:YoklamaAralik -lt $taban) { $taban }
-                    else { [Math]::Min($script:YoklamaAralik * 2, $YOKLAMA_TAVAN_SN) }
-            if ((Test-Ozellik $j 'tekrarSn') -and [int]$j.tekrarSn -gt 0) {
-                $yeni = [Math]::Max($yeni, [Math]::Min([int]$j.tekrarSn, $YOKLAMA_TAVAN_SN))
-            }
-            if ($yeni -ne $script:YoklamaAralik) {
-                Write-Kayit ("canli yoklama geri cekildi: {0} sn (hata: {1}{2})" -f `
-                    $yeni, [string]$j.hata, $(if (Test-Ozellik $j 'http') { ' ' + $j.http } else { '' }))
-            }
-            $script:YoklamaAralik = $yeni
-            $script:Kota = $null; return
-        }
         $olcum = if (Test-Ozellik $j 'olcumZamani') { [int64]$j.olcumZamani } else { $null }
         if (-not (Test-OlcumZamani $olcum)) {
             Write-Tani 'kota: ileri tarihli olcum, yok sayildi'
@@ -1161,27 +1262,117 @@ function Read-Kota {
             $script:Kota = $null; return
         }
         $script:Kota = $j
-
-        # Temiz yanıtta KADEMELİ inil, tabana atlama.
-        #
-        # Önce her başarıda doğrudan tabana dönülüyordu; üretimde bu 60↔120
-        # arasında sürekli salınım üretti (günlükte onlarca "geri çekildi /
-        # tabana döndü" çifti). Uç nokta 60 saniyeyi kaldırmıyor, ama biz her
-        # seferinde yeniden deneyip yeniden 429 yiyorduk.
-        #
-        # Yarılayarak inmek sürdürülebilir hıza oturuyor: hata varken hızla
-        # seyrekleş, düzelince yavaşça sıklaş.
-        $taban = [int]$script:Ayar.canliYoklama
-        if ($script:YoklamaAralik -gt $taban) {
-            $yeni = [Math]::Max($taban, [int]($script:YoklamaAralik / 2))
-            if ($yeni -ne $script:YoklamaAralik) {
-                Write-Kayit ("canli yoklama siklasti: {0} sn" -f $yeni)
-            }
-            $script:YoklamaAralik = $yeni
-        }
+        Set-YoklamaBasari
         Write-Tani ("kota: olcum={0} f5={1}" -f $olcum, $j.five_hour.used_percentage)
     } catch {
         Write-Tani ("kota: okuma hatasi " + $_.Exception.Message)
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Yoklama aralığı — UYARLANABİLİR TABAN
+#
+# Uç nokta üçüncü-parti yoklamayı sınırlıyor. Eski kural "hatada ikiye katla,
+# başarıda yarıya indir, tabana kadar" idi ve YAKINSAMIYORDU: taban 60 iken
+# 120'nin yarısı tam tabana düşüyor, oradan anında yine 429 geliyordu. Günlükte
+# saatte ~20 kez tekrarlayan 60↔120 salınımı bundandı.
+#
+# Yeni kural: BAŞARISIZ OLDUĞU KANITLANAN aralık taban olarak yükseltilir.
+# Böylece sistem uç noktanın kaldırdığı hıza oturur. Koşullar düzelebileceği
+# için yeterince ardışık başarıdan sonra taban bir kademe geri denenir —
+# ama her başarıda değil, yoksa eski salınım geri gelir.
+# ─────────────────────────────────────────────────────────────────────────────
+function Set-YoklamaBasari {
+    $ayar = [int]$script:Ayar.canliYoklama
+    if ($script:YoklamaTaban -lt $ayar) { $script:YoklamaTaban = $ayar }
+    $script:ArdisikBasari++
+
+    if ($script:YoklamaTaban -gt $ayar -and $script:ArdisikBasari -ge $YOKLAMA_INIS_BASARI) {
+        $yeni = [Math]::Max($ayar, [int]($script:YoklamaTaban / 2))
+        if ($yeni -ne $script:YoklamaTaban) {
+            Write-Kayit ("canli yoklama tabani indirildi: {0} sn ({1} ardisik basari)" -f `
+                $yeni, $script:ArdisikBasari)
+            $script:YoklamaTaban = $yeni
+        }
+        $script:ArdisikBasari = 0
+    }
+
+    if ($script:YoklamaAralik -ne $script:YoklamaTaban) {
+        Write-Kayit ("canli yoklama siklasti: {0} sn" -f $script:YoklamaTaban)
+        $script:YoklamaAralik = $script:YoklamaTaban
+    }
+}
+
+function Set-YoklamaHata {
+    param($Hata)
+    $ayar = [int]$script:Ayar.canliYoklama
+    if ($script:YoklamaTaban -lt $ayar) { $script:YoklamaTaban = $ayar }
+    $script:ArdisikBasari = 0
+
+    # YEREL hatada geri ÇEKİLME: jeton süresi dolmuş, kimlik dosyası yok gibi
+    # durumlarda yoklayıcı hiç istek atmıyor — idare edilecek bir uzak çağrı
+    # yok. Durum her an kendiliğinden düzelebilir (Claude Code kullanıldıkça
+    # jetonu tazeler) ve 900 saniyeye çıkmış bir aralık bunu 15 dakika geç fark
+    # eder. Tabanda kal.
+    if ((Test-Ozellik $Hata 'yerel') -and $Hata.yerel) {
+        if ($script:YoklamaAralik -ne $script:YoklamaTaban) {
+            Write-Kayit ("canli yoklama tabana alindi ({0} sn): yerel durum, ag istegi yok ({1})" -f `
+                $script:YoklamaTaban, [string]$Hata.hata)
+        }
+        $script:YoklamaAralik = $script:YoklamaTaban
+        return
+    }
+
+    # Uzak hata: BU ARALIK ÇALIŞMIYOR. İkiye katla ve tabanı da oraya çek —
+    # bir daha aynı duvara toslamayalım. Sunucu Retry-After söylediyse ONA
+    # uyulur; bizim ikiye katlamamızdan daha bilgili bir sayıdır.
+    $yeni = [Math]::Min([Math]::Max($script:YoklamaAralik, $script:YoklamaTaban) * 2, $YOKLAMA_TAVAN_SN)
+    if ((Test-Ozellik $Hata 'tekrarSn') -and [int]$Hata.tekrarSn -gt 0) {
+        $yeni = [Math]::Max($yeni, [Math]::Min([int]$Hata.tekrarSn, $YOKLAMA_TAVAN_SN))
+    }
+    if ($yeni -ne $script:YoklamaAralik) {
+        Write-Kayit ("canli yoklama geri cekildi: {0} sn (hata: {1}{2})" -f `
+            $yeni, [string]$Hata.hata, $(if (Test-Ozellik $Hata 'http') { ' ' + $Hata.http } else { '' }))
+    }
+    $script:YoklamaAralik = $yeni
+    if ($script:YoklamaTaban -lt $yeni) { $script:YoklamaTaban = $yeni }
+}
+
+# YABANCI HESABI YOKLAMAYA DEVAM ETMENİN ANLAMI YOK.
+#
+# Yoklayıcı Claude Code'un jetonunu kullanır; o hesap masaüstününkinden
+# farklıysa gelen sonuç zaten reddediliyor. Dakikada bir ağa çıkıp atacağımız
+# bir cevabı istemek hem boşuna hem de uç noktayı gereksiz yere zorluyor
+# (429'ların bir kısmı bundandı).
+#
+# Yoklamayı tamamen DURDURMUYORUZ: kullanıcı Claude Code'u diğer hesaba
+# geçirebilir ve widget bunu fark etmeli. Tavana çekiyoruz — 15 dakikada bir
+# yoklama, durum düzelirse Set-YoklamaBasari tabanı yeniden indirir.
+function Set-YoklamaHesapUyusmazligi {
+    # SAYAÇ ÖNCE SIFIRLANIR, erken çıkıştan önce. Yabancı hesabın yoklaması ağ
+    # açısından "başarılı" sayıldığı için Set-YoklamaBasari sayacı ilerletiyor;
+    # sıfırlamasak 10 yoklamada bir taban inip tekrar tavana çıkardı.
+    $script:ArdisikBasari = 0
+
+    if ($script:YoklamaTaban -ge $YOKLAMA_TAVAN_SN) { return }   # zaten tavanda
+    Write-Kayit ("canli yoklama tavana alindi ({0} sn): jeton baska hesaba ait" -f $YOKLAMA_TAVAN_SN)
+    $script:YoklamaTaban  = $YOKLAMA_TAVAN_SN
+    $script:YoklamaAralik = $YOKLAMA_TAVAN_SN
+}
+
+# Yoklayıcının bıraktığı hata kaydı. Başarıda dosyayı kendisi siliyor, yani
+# "dosya yok" = son yoklama temiz demektir.
+function Read-YoklamaHatasi {
+    if ($script:Ayar.canliYoklama -le 0) { return }
+    if (-not (Test-Path $KotaHataDosya)) { return }
+    try {
+        $bilgi = Get-Item $KotaHataDosya
+        if ($bilgi.LastWriteTime -eq $script:KotaHataSonYazma) { return }   # yeni hata yok
+        $j = Get-Content $KotaHataDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+        $script:KotaHataSonYazma = $bilgi.LastWriteTime
+        if (Test-Ozellik $j 'hata') { Set-YoklamaHata $j }
+    } catch {
+        Write-Tani ("kota-hata: okuma hatasi " + $_.Exception.Message)
     }
 }
 
@@ -1280,9 +1471,15 @@ function Update-Vurgu {
 # gizli başlatılıyor (Start-Process kısa ömürlü konsol uygulamalarında
 # göz kırpma üretiyor).
 function Invoke-Yoklayici {
-    $taban = [int]$script:Ayar.canliYoklama
-    if ($taban -le 0) { return }
-    if ($script:YoklamaAralik -lt $taban) { $script:YoklamaAralik = $taban }
+    $ayar = [int]$script:Ayar.canliYoklama
+    if ($ayar -le 0) { return }
+
+    # Yoklayıcının bıraktığı hata kaydı burada okunuyor: aralık kararı
+    # veriden değil, YOKLAMANIN SONUCUNDAN çıkar.
+    Read-YoklamaHatasi
+
+    if ($script:YoklamaTaban -lt $ayar) { $script:YoklamaTaban = $ayar }
+    if ($script:YoklamaAralik -lt $script:YoklamaTaban) { $script:YoklamaAralik = $script:YoklamaTaban }
     if (([DateTime]::Now - $script:SonYoklama).TotalSeconds -lt $script:YoklamaAralik) { return }
 
     if (-not (Test-Path $YoklayiciBetik)) {
@@ -1339,6 +1536,23 @@ function Get-DurumOlcumu {
     return 0
 }
 
+# Bir kaydın hesabı yetkili hesapla uyuşuyor mu?
+#
+# Damgası OLMAYAN kayıt reddedilmez: eski sürüm betiklerin yazdığı dosyalar
+# böyle ve yükseltme sırasında ekranı boşaltmak, yanlış hesabı göstermekten
+# daha kötü olurdu. Betikler bir sonraki yazımda damgayı zaten koyar.
+# Yetkili hesap bilinmiyorsa (masaüstü dosyası yok) kıyaslanacak bir şey de
+# yoktur — o zaman da kabul edilir.
+function Test-Hesap {
+    param($Kayit)
+    if ($null -eq $script:YetkiliHesap) { return $true }
+    if (-not (Test-Ozellik $Kayit 'hesap')) { return $true }
+    if (-not (Test-Ozellik $Kayit.hesap 'org')) { return $true }
+    if ([string]$Kayit.hesap.org -eq [string]$script:YetkiliHesap) { return $true }
+    $script:RedEdilenHesap = $(if (Test-Ozellik $Kayit.hesap 'posta') { [string]$Kayit.hesap.posta } else { [string]$Kayit.hesap.org })
+    return $false
+}
+
 function Merge-Kaynaklar {
     $d = $script:DurumHam
     $m = $script:Masaustu
@@ -1347,6 +1561,15 @@ function Merge-Kaynaklar {
     # sıfırlanma saatini ödünç versin.
     $dGecerli = ($null -ne $d) -and (Test-OlcumZamani (Get-DurumOlcumu $d))
     if ($null -ne $d -and -not $dGecerli) { Write-Tani 'durum.json: ileri tarihli olcum, yok sayildi' }
+
+    # BAŞKA HESABIN VERİSİ HİÇ YARIŞA GİRMEZ. Claude Code masaüstü
+    # uygulamasından farklı bir hesaba bağlıysa durum.json başka bir kotayı
+    # anlatıyor demektir; onu birleştirmek iki hesabın yüzdelerini aynı barda
+    # karıştırır.
+    if ($dGecerli -and -not (Test-Hesap $d)) {
+        Write-Tani 'durum.json: baska hesap, yok sayildi'
+        $dGecerli = $false
+    }
 
     if ($null -eq $m) { return $(if ($dGecerli) { $d } else { $null }) }
 
@@ -1373,17 +1596,32 @@ function Merge-Kaynaklar {
     $v.olcumZamani = $m.t
     if ($null -eq $v.yazildi -or [int64]$v.yazildi -lt $m.t) { $v.yazildi = $m.t }
     $v.hiz = $m.hiz
+    # KAYIT MASAÜSTÜNÜN İSE GRAFİĞİ DE MASAÜSTÜNÜN OLSUN.
+    #
+    # Eskiden `haftalik` her koşulda durum.json'dan kopyalanıyordu. Sonuç:
+    # yüzdeler masaüstünden gelirken grafik günler öncesinin statusLine
+    # verisini gösteriyor, üstelik kayıt taze damgalandığı için kart tam opak
+    # duruyordu. Kullanıcının gördüğü "yenilenmiyor" tam olarak buydu.
+    if ($null -ne $m.haftalik -and $m.haftalik.Count -eq 7) { $v.haftalik = $m.haftalik }
     $v.kaynak = 'masaustu'
     return [pscustomobject]$v
 }
 
 function Read-Durum {
+    $script:RedEdilenHesap = $null   # her turda yeniden karar verilir
     Read-DurumDosyasi
     Read-Masaustu
     Read-Kota
     $script:Veri = Merge-Kaynaklar
     # Canlı yoklama açıksa API sonucu en taze kaynaktır; ölçüm zamanı ona göre.
-    if ($null -ne $script:Kota) {
+    #
+    # Hesap kapısı BURADA, Read-Kota'da değil: orası mtime ile korumalı, yani
+    # dosya değişmediği turlarda hiç çalışmıyor. Kapı her turda işlemeli,
+    # yoksa önbellekteki yanlış hesap sessizce geçer.
+    if ($null -ne $script:Kota -and -not (Test-Hesap $script:Kota)) {
+        Write-Tani 'kota.json: baska hesap, yok sayildi'
+        Set-YoklamaHesapUyusmazligi
+    } elseif ($null -ne $script:Kota) {
         $kOlcum = [int64]$script:Kota.olcumZamani
         $vOlcum = if (Test-Ozellik $script:Veri 'olcumZamani') { [int64]$script:Veri.olcumZamani } else { 0 }
         if ($kOlcum -gt $vOlcum) {
@@ -1464,7 +1702,7 @@ function Remove-AcikUyari {
     [void]$script:AcikUyarilar.Remove($Pencere)
 }
 
-[xml]$uyariXaml = @'
+$uyariXamlMetin = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Kullanim uyarisi"
@@ -1496,6 +1734,12 @@ function Remove-AcikUyari {
   </Border>
 </Window>
 '@
+
+# Yer tutucular BURADA da doldurulmalı. Ana pencere için 800. satırdaki döngü
+# bunu yapıyor ama bu blok doğrudan [xml]'e cast ediliyordu: Tamam düğmesi
+# ekranda harfi harfine "@@TAMAM@@" yazıyordu — iki dilde de.
+foreach ($a in $METINLER[$DIL].Keys) { $uyariXamlMetin = $uyariXamlMetin.Replace("@@$a@@", $METINLER[$DIL][$a]) }
+[xml]$uyariXaml = $uyariXamlMetin
 
 function Show-Uyari {
     param([string]$Etiket, [double]$Yuzde, [Nullable[datetime]]$Sifirlanma, [int]$Esik)
@@ -1689,13 +1933,30 @@ $IKON_ONAY    = [char]0xE73E   # ✓
 $IKON_BEKLE   = [char]0xE823   # kum saati
 
 function Update-Olay {
-    if (-not (Test-Path $OlayDosya)) { $script:SonOlayMs = 0; $OlayKutu.Visibility = 'Collapsed'; return }
-
-    try {
-        $o = Get-Content $OlayDosya -Raw -Encoding UTF8 | ConvertFrom-Json
-    } catch {
-        return   # yarım yazılmış dosya — bir sonraki turda tekrar denenir
+    if (-not (Test-Path $OlayDosya)) {
+        $script:SonOlayMs = 0
+        $script:OlayHam = $null
+        $OlayKutu.Visibility = 'Collapsed'
+        return
     }
+
+    # DOSYAYI yalnızca değiştiğinde oku. Gerisi her turda çalışmaya devam
+    # etmeli: yanıp sönme ve 15 dakikalık ömür saat bazlı, veri bazlı değil.
+    # Diğer üç okuyucuda bu kapı vardı, burada yoktu — olay.json saatte ~3 kez
+    # değişen bir dosyayken saniyede bir okunup ayrıştırılıyordu.
+    try {
+        $bilgi = Get-Item $OlayDosya
+        if ($bilgi.LastWriteTime -ne $script:OlaySonYazma) {
+            $script:OlayHam = Get-Content $OlayDosya -Raw -Encoding UTF8 | ConvertFrom-Json
+            $script:OlaySonYazma = $bilgi.LastWriteTime
+        }
+    } catch {
+        # Yarım yazılmış dosya. Damga güncellenmediği için sonraki turda
+        # yeniden denenir; o ana kadar elimizdeki son sağlam kayıt gösterilir.
+    }
+
+    $o = $script:OlayHam
+    if ($null -eq $o) { return }
 
     # Hook'lar masaüstü uygulamasında da ateşleniyor (ölçüldü). Bu zaman damgası
     # "ölçümden sonra kullanım oldu mu" sorusunun cevabı; olay kutusu kapansa da tutulur.
@@ -1850,6 +2111,14 @@ function Update-Gorunum {
     # kullanıcı açar, sayı tazelenmez ve sebebini öğrenemez.
     if ([int]$script:Ayar.canliYoklama -gt 0 -and -not (Test-Path $YoklayiciBetik)) {
         $Uyari.Text = (T 'YOKLAMA_BETIK_YOK')
+        $Uyari.Visibility = 'Visible'
+    }
+
+    # Kaynaklardan biri BAŞKA HESABA aitse SÖYLE. Sessizce yok saymak doğru
+    # karar ama sebebini söylememek "widget bozuldu mu?" sorusunu doğurur —
+    # yoklayıcı betiği eksik olduğunda da aynı gerekçeyle yazıyoruz.
+    if ($null -ne $script:RedEdilenHesap) {
+        $Uyari.Text = ((T 'HESAP_UYUSMAZ') -f $script:RedEdilenHesap)
         $Uyari.Visibility = 'Visible'
     }
 
@@ -2217,9 +2486,12 @@ function Set-YoklamaSecimi {
     $script:Ayar.canliYoklama = $Sn
     $script:SonYoklama = [datetime]::MinValue    # açılır açılmaz ilk yoklama
     $script:YoklamaAralik = $Sn                  # geri çekilmeyi sıfırla
+    $script:YoklamaTaban = $Sn                   # uyarlanabilir taban da sıfırlansın
+    $script:ArdisikBasari = 0
     $script:YoklayiciUyarildi = $false
     $script:Kota = $null
     $script:KotaSonYazma = [datetime]::MinValue
+    $script:KotaHataSonYazma = [datetime]::MinValue
     Save-Ayarlar -Ayar $script:Ayar
     foreach ($o in (Get-Ogesi 'MnuYoklama').Items) { $o.IsChecked = ([int]$o.Tag -eq $Sn) }
     Write-Tani ("canli yoklama: {0} sn" -f $Sn)
@@ -2350,11 +2622,11 @@ $win.ContextMenu.Add_Closed({ $menuIzleyici.Stop() })
 $veriTimer = New-Object System.Windows.Threading.DispatcherTimer
 $veriTimer.Interval = [TimeSpan]::FromSeconds(1)
 $veriTimer.Add_Tick({
-    try { Invoke-Cagri }       catch { Write-Tani ("HATA Invoke-Cagri: " + $_.Exception.Message) }
-    try { Update-SeritUstte }  catch { Write-Tani ("HATA Update-SeritUstte: " + $_.Exception.Message) }
-    try { Update-Vurgu }     catch { Write-Tani ("HATA Update-Vurgu: " + $_.Exception.Message) }
-    try { Invoke-Yoklayici } catch { Write-Tani ("HATA Invoke-Yoklayici: " + $_.Exception.Message) }
-    try { Update-Gorunum }   catch { Write-Tani ("HATA Update-Gorunum: " + $_.Exception.Message) }
+    try { Invoke-Cagri }      catch { Write-TickHatasi 'Invoke-Cagri'      $_.Exception.Message }
+    try { Update-SeritUstte } catch { Write-TickHatasi 'Update-SeritUstte' $_.Exception.Message }
+    try { Update-Vurgu }      catch { Write-TickHatasi 'Update-Vurgu'      $_.Exception.Message }
+    try { Invoke-Yoklayici }  catch { Write-TickHatasi 'Invoke-Yoklayici'  $_.Exception.Message }
+    try { Update-Gorunum }    catch { Write-TickHatasi 'Update-Gorunum'    $_.Exception.Message }
 })
 
 # Win+D ("masaüstünü göster") pencereyi küçültür. Yoklama yerine olayı
@@ -2369,8 +2641,18 @@ Set-ArkaPlan $script:Ayar.arkaPlan
 Update-Gorunum
 
 $win.Add_SourceInitialized({
-    if ($null -ne $script:Ayar.sol -and $null -ne $script:Ayar.ust) {
-        Set-PencereKonumu -Sol ([double]$script:Ayar.sol) -Ust ([double]$script:Ayar.ust)
+    # KAYITLI YERLEŞİMİN anahtarlarını kullan, kartınkileri değil.
+    #
+    # Burası her koşulda $Ayar.sol/.ust okuyordu — yani KART konumunu. Şerit
+    # ya da kompakt kullanan biri pencereyi önce kartın koordinatında görüyor,
+    # hemen ardından Set-Tema onu kendi yerine taşıyordu: görünür bir sıçrama.
+    # Dosyadaki diğer bütün konum kullanımları zaten Get-KonumAnahtari'den
+    # geçiyor; tek istisna burasıydı.
+    $a = Get-KonumAnahtari
+    if ($null -ne $script:Ayar.($a[0]) -and $null -ne $script:Ayar.($a[1])) {
+        Set-PencereKonumu -Sol ([double]$script:Ayar.($a[0])) -Ust ([double]$script:Ayar.($a[1]))
+    } elseif ($script:Ayar.tema -eq 'serit') {
+        Set-SeritVarsayilanKonumu
     } else {
         Set-VarsayilanKonum
     }
@@ -2414,12 +2696,29 @@ $win.Dispatcher.add_UnhandledException({
 })
 
 $win.Add_ContentRendered({
-    Set-MasaustuSeviyesi
-    (Get-Ogesi 'MnuBaslangic').IsChecked = Test-Baslangic
-    $nabizTimer.Start()
-    Set-Renkler $script:Ayar.renk -Kaydetme   # kayıtlı palet
-    Set-Tema $script:Ayar.tema -Kaydetme      # kayıtlı yerleşim
+    # ZAMANLAYICILAR ÖNCE BAŞLAR.
+    #
+    # $veriTimer.Start() bu handler'ın SON satırıydı ve handler korumasızdı:
+    # önündeki beş satırdan biri patlarsa dispatcher istisnayı yutuyor
+    # ($o.Handled = $true), widget ayakta ve bir kez çizilmiş kalıyor ama bir
+    # daha HİÇ yenilenmiyordu. Ekranda bu, tam olarak "program çalışıyor ama
+    # güncellemiyor" gibi görünür ve günlükte tek satır iz bırakmaz.
+    #
+    # Yenileme, kurulumun geri kalanına bağımlı olmamalı. Öğeler zaten modül
+    # düzeyindeki Update-Gorunum ile dolduruldu; bir saniye sonraki ilk tick
+    # tema uygulanmadan çalışsa bile zararsızdır.
     $veriTimer.Start()
+    $nabizTimer.Start()
+
+    try {
+        Set-MasaustuSeviyesi
+        (Get-Ogesi 'MnuBaslangic').IsChecked = Test-Baslangic
+        Set-Renkler $script:Ayar.renk -Kaydetme   # kayıtlı palet
+        Set-Tema $script:Ayar.tema -Kaydetme      # kayıtlı yerleşim
+    } catch {
+        Write-Kayit ('ACILIS KURULUM HATASI: ' + $_.Exception.Message)
+        $script:IcHata = $true
+    }
 
     # Öz-test (KULLANIM_ESIKTEST=1): eşik menüsü öğesine GERÇEKTEN tıklar.
     # Bu yol daha önce sınanmamıştı ve closure kapsam hatası yüzünden widget'ı
