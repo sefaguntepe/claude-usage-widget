@@ -187,6 +187,8 @@ scripts carry no stamp and are not rejected; the stamp appears on their next wri
   (100 points = one full window, so `today 2.1×` means about two windows today)
 - **Threshold alerts** — optional pop-up when a limit crosses a percentage you
   pick; fires once per window and re-arms when the window resets
+
+  ![Threshold alert](docs/alert.png)
 - **Event line** — "Claude finished · +214 −37 · my-project" or
   "waiting for permission", driven by hooks
 - **Honest about stale data** — dims and states *why* the numbers stopped
@@ -285,9 +287,15 @@ Right-click the widget:
 | Menu | What it does |
 |---|---|
 | *Background* | Transparent / light / dark backdrop |
+| *Colours* | Palette — Default, Catppuccin Mocha, Dracula, Nord, Gruvbox Dark |
+| *Appearance* | Layout — card, strip, compact, terminal |
+| *Live polling (API)* | Poll the usage endpoint directly; off by default, read the trade first |
 | *Alert threshold* | Per-window alert level — off, or 50–95% |
+| *Start at sign-in* | Shortcut in the Startup folder; no registry, no service |
 | *Reset position* | Move back to the top-right corner |
 | *Close* | Quit |
+
+![Right-click menu](docs/menu.png)
 
 Alerts are **off by default**. When one fires it stays until clicked, never
 steals focus, and will not fire again for the same window even if usage keeps

@@ -237,6 +237,8 @@ Kapalı, %50, %60, %70, %75, %80, %85, %90, %95. **Varsayılan kapalıdır.**
 Sıfırlanma: 8 Eylül 14:47                        [ Tamam ]
 ```
 
+![Eşik uyarısı](docs/alert.png)
+
 - **Tıklanana kadar durur.** Topmost ama odak çalmaz — yazı yazarken
   tuşlarınızı kesmez. Birden çok uyarı sağ altta istiflenir.
 - **Pencere başına bir kez.** Aynı 5 saatlik pencerede %85 → %95 çıksanız da
@@ -429,6 +431,11 @@ Sağ tık → **Görünüm** ile iki yerleşim arasında geçiş yapılır:
 | **Terminal** | 197×80 — tek aralıklı yazı, karakterden bar. Kod ekranına karışmayan görünüm. |
 
 ![Yerleşimler](docs/layouts.png)
+
+Yerleşim, renk, eşik, canlı yoklama ve "açılışta başlat" — hepsi aynı sağ tık
+menüsünden. Ayar dosyası düzenlemek gerekmiyor.
+
+![Sağ tık menüsü](docs/menu.png)
 
 Her yerleşim **kendi konumunu** tutar; ortak tek konum olsaydı her geçişte biri
 kayardı. Konum anahtarları `$YERLESIMLER` tablosundaki ön ekten türetilir, yani
