@@ -98,18 +98,19 @@ function jetonOku() {
   return { jeton: o.accessToken };
 }
 
-/* BU OLCUM HANGI HESABA AIT?
-
-   Bir makinede birden fazla Claude hesabi olabilir: Claude Code bir hesaba,
-   masaustu uygulamasi baskasina bagli olabilir. Widget uc kaynagi birlestirdigi
-   icin, hesap damgasi olmadan iki hesabin yuzdeleri ayni barda karisir --
-   uretimde tam olarak bu oldu: masaustu %81 derken bu uc %4 diyordu.
+/* BU KAYIT HANGI HESABA AIT?
 
    Kimlik olarak ORGANIZASYON kimligi kullaniliyor; masaustu uygulamasinin
    gecmis dosyasinda ortak olarak bulunan tek alan o (`samples[].org`).
 
-   Jetonun kendisi burada da gorulmez: okunan dosya ~/.claude.json, kimlik
-   dosyasi degil. */
+   ~/.claude.json buyuk olabilir (proje gecmisi de orada), o yuzden tamami
+   ayristirilmiyor. Ama SABIT UZUNLUKTA BIR DILIM ALMAK YANLISTI: oauthAccount
+   nesnesi olculdugunde 857 bayttı, dilim ise 2048 -- yani komsu verinin icine
+   tasiyordu ve "organizationUuid" bu dosyada birden fazla geciyor. Yanlis
+   hesap okumak, bu surumde duzeltilen hatanin ta kendisini geri getirirdi.
+
+   Bunun yerine nesnenin KENDI siniri bulunuyor. Parantez sayarken metin
+   icleri atlanir; bir goruntu adindaki suslu parantez sayimi bozmasin. */
 function hesapOku() {
   let ham;
   try {
@@ -117,13 +118,35 @@ function hesapOku() {
   } catch (e) {
     return null;
   }
-  const i = ham.indexOf('"oauthAccount"');
-  if (i === -1) return null;
-  const dilim = ham.slice(i, i + 2048);
-  const org = /"organizationUuid"\s*:\s*"([^"]+)"/.exec(dilim);
-  if (!org) return null;
-  const posta = /"emailAddress"\s*:\s*"([^"]+)"/.exec(dilim);
-  return { org: org[1], posta: posta ? posta[1] : null };
+
+  const im = ham.indexOf('"oauthAccount"');
+  if (im === -1) return null;
+  const bas = ham.indexOf('{', im);
+  if (bas === -1) return null;
+
+  let derinlik = 0, metinde = false, kacis = false, son = -1;
+  for (let k = bas; k < ham.length; k++) {
+    const c = ham[k];
+    if (metinde) {
+      if (kacis) kacis = false;
+      else if (c === '\\') kacis = true;
+      else if (c === '"') metinde = false;
+      continue;
+    }
+    if (c === '"') metinde = true;
+    else if (c === '{') derinlik++;
+    else if (c === '}') { derinlik--; if (derinlik === 0) { son = k; break; } }
+  }
+  if (son === -1) return null;
+
+  let nesne;
+  try { nesne = JSON.parse(ham.slice(bas, son + 1)); } catch (e) { return null; }
+  if (!nesne || typeof nesne.organizationUuid !== 'string' || !nesne.organizationUuid) return null;
+
+  return {
+    org: nesne.organizationUuid,
+    posta: typeof nesne.emailAddress === 'string' ? nesne.emailAddress : null,
+  };
 }
 
 /* Atomik yazma: gecici ad surece ozel (sabit '.tmp' adini butun yazicilar

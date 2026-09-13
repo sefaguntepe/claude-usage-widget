@@ -73,19 +73,17 @@ function jsonOku(p, varsayilan) {
 
 /* BU KAYIT HANGI HESABA AIT?
 
-   Bir makinede birden fazla Claude hesabi olabilir: Claude Code bir hesaba,
-   masaustu uygulamasi baskasina bagli olabilir. Widget uc kaynagi birlestirdigi
-   icin, hesap damgasi olmadan iki hesabin yuzdeleri ayni barda karisiyor --
-   uretimde tam olarak bu oldu: masaustu %81 derken API %4 diyordu ve bar
-   ikisi arasinda gidip geliyordu.
-
    Kimlik olarak ORGANIZASYON kimligi kullaniliyor; masaustu uygulamasinin
-   kendi gecmis dosyasinda ortak olarak bulunan tek alan o (`samples[].org`).
-   E-posta yalnizca kullaniciya gosterilmek icin tasiniyor.
+   gecmis dosyasinda ortak olarak bulunan tek alan o (`samples[].org`).
 
-   ~/.claude.json buyuk olabilir (proje gecmisi de orada). Her render'da
-   MB'lik bir JSON ayristirmamak icin ham metinde isaretlenen yerden kucuk bir
-   dilim alinip orada aranir. */
+   ~/.claude.json buyuk olabilir (proje gecmisi de orada), o yuzden tamami
+   ayristirilmiyor. Ama SABIT UZUNLUKTA BIR DILIM ALMAK YANLISTI: oauthAccount
+   nesnesi olculdugunde 857 bayttı, dilim ise 2048 -- yani komsu verinin icine
+   tasiyordu ve "organizationUuid" bu dosyada birden fazla geciyor. Yanlis
+   hesap okumak, bu surumde duzeltilen hatanin ta kendisini geri getirirdi.
+
+   Bunun yerine nesnenin KENDI siniri bulunuyor. Parantez sayarken metin
+   icleri atlanir; bir goruntu adindaki suslu parantez sayimi bozmasin. */
 function hesapOku() {
   let ham;
   try {
@@ -93,13 +91,35 @@ function hesapOku() {
   } catch (e) {
     return null;
   }
-  const i = ham.indexOf('"oauthAccount"');
-  if (i === -1) return null;
-  const dilim = ham.slice(i, i + 2048);
-  const org = /"organizationUuid"\s*:\s*"([^"]+)"/.exec(dilim);
-  if (!org) return null;
-  const posta = /"emailAddress"\s*:\s*"([^"]+)"/.exec(dilim);
-  return { org: org[1], posta: posta ? posta[1] : null };
+
+  const im = ham.indexOf('"oauthAccount"');
+  if (im === -1) return null;
+  const bas = ham.indexOf('{', im);
+  if (bas === -1) return null;
+
+  let derinlik = 0, metinde = false, kacis = false, son = -1;
+  for (let k = bas; k < ham.length; k++) {
+    const c = ham[k];
+    if (metinde) {
+      if (kacis) kacis = false;
+      else if (c === '\\') kacis = true;
+      else if (c === '"') metinde = false;
+      continue;
+    }
+    if (c === '"') metinde = true;
+    else if (c === '{') derinlik++;
+    else if (c === '}') { derinlik--; if (derinlik === 0) { son = k; break; } }
+  }
+  if (son === -1) return null;
+
+  let nesne;
+  try { nesne = JSON.parse(ham.slice(bas, son + 1)); } catch (e) { return null; }
+  if (!nesne || typeof nesne.organizationUuid !== 'string' || !nesne.organizationUuid) return null;
+
+  return {
+    org: nesne.organizationUuid,
+    posta: typeof nesne.emailAddress === 'string' ? nesne.emailAddress : null,
+  };
 }
 
 /* Atomik yazma. Iki nokta onemli:
@@ -347,8 +367,34 @@ function main() {
   // yoksa boste bir oturumun dusuk fotografi gunluk toplami bozardi.
   let f5 = null, d7 = null;
 
+  /* DIKKAT: `hiz` BU KAPSAMDA durmali. 6f0206d ile `if (rl ...)` blogunun
+     ICINE alinmisti ve asagida 'Tuketim hizi' bolumunde blok DISINDAN
+     okunuyor -- `let` blok kapsamli oldugu icin her calismada
+     ReferenceError. Istisnayi main()'in cevresindeki `catch { write('') }`
+     yutuyordu, yani hata hicbir yerde gorunmeden TERMINAL SATIRININ TAMAMI
+     bos basiliyordu; durum.json yazildigi icin (o, throw'dan once oluyor)
+     arizanin disaridan tek belirtisi "statusLine hic gorunmuyor" idi. */
+  let hiz = null;
+
   if (rl && (rl.five_hour || rl.seven_day)) {
-    const eski = jsonOku(DOSYA, null);
+    const hesap = hesapOku();
+    const eskiHam = jsonOku(DOSYA, null);
+
+    /* HESAP DEGISTIYSE ONCEKI KAYIT BASKA BIR KOTAYI ANLATIYOR.
+
+       Damga KAYIT basina konuyor, birlestirme ise PENCERE basina calisiyor.
+       Ikisi ayri kaynaktan gelince tek bir durum.json, gecerli gorunen bir
+       damga altinda IKI hesabin sayilarini tasiyabiliyordu: eski kaydin
+       yuzdesi A hesabindan, damga B hesabindan. Ayni okumayi kullanmak hem
+       bunu hem de okuma ile yazma arasinda hesap degisirse olusan yarisi
+       kapatiyor.
+
+       Damgasiz eski kayit REDDEDILMEZ: widget tarafindaki Test-Hesap ile ayni
+       kural -- kanitlayamadigimiz seyi yok saymiyoruz, eski surumden gelen
+       kayit bir sonraki yazimda zaten damgalanir. */
+    const ayniHesap = !eskiHam || !eskiHam.hesap || !hesap ||
+                      String(eskiHam.hesap.org) === String(hesap.org);
+    const eski = ayniHesap ? eskiHam : null;
     const simdi = Date.now();
 
     const b5 = pencereBirlestir(eski && eski.five_hour, rl.five_hour);
@@ -363,7 +409,6 @@ function main() {
     f5 = b5.p && typeof b5.p.used_percentage === 'number' ? b5.p.used_percentage : null;
     d7 = b7.p && typeof b7.p.used_percentage === 'number' ? b7.p.used_percentage : null;
 
-    let hiz = null;
     let haftalik = [];
     if (f5 !== null) {
       const g = gecmisIsle(f5, d7);
@@ -375,7 +420,7 @@ function main() {
     jsonYaz(DOSYA, {
       yazildi: simdi,
       olcumZamani: olcumZamani,
-      hesap: hesapOku(),
+      hesap: hesap,
       five_hour: b5.p,
       seven_day: b7.p,
       hiz: hiz,
@@ -469,5 +514,18 @@ function main() {
 if (process.argv[2] === '--surum-yenile') {
   try { surumYenile(); } catch (e) { /* sessiz */ }
 } else {
-  try { main(); } catch (e) { process.stdout.write(''); }
+  /* Bos satir basip cikmak DOGRU: statusLine bir hata metniyle kirletilmemeli.
+     Ama sebebi hicbir yere yazmamak yanlisti -- `hiz` kapsam hatasi tam olarak
+     boyle gizlendi ve terminal satiri gunlerce sessizce bos kaldi. Artik
+     gerekce kucuk bir dosyaya dusuyor; satir yine temiz cikiyor. */
+  try {
+    main();
+  } catch (e) {
+    try {
+      fs.mkdirSync(KLASOR, { recursive: true });
+      fs.writeFileSync(path.join(KLASOR, 'statusline-hata.txt'),
+        new Date().toISOString() + '  ' + (e && e.stack ? e.stack : String(e)) + '\n', 'utf8');
+    } catch (e2) { /* tani yazamiyorsak da satiri bozmayiz */ }
+    process.stdout.write('');
+  }
 }
